@@ -433,16 +433,13 @@ async def on_message(message: discord.Message):
 
 @client.event
 async def on_ready():
-    await bot.tree.sync()
-    await bot.change_presence(
-        status=discord.Status.idle,
-        activity=discord.Activity(
-            type=discord.ActivityType.streaming,
-            name="Ai bot",
-            url="https://guns.lol/kimi.i"
-        )
+    await client.change_presence(
+        status=discord.Status.do_not_disturb
     )
-    print(f"Запущено за {bot.user}")
+    for guild in client.guilds:
+        await tree.sync(guild=guild)
+    await tree.sync()
+    print(f"Запущен: {client.user}")
 
 
 client.run(TOKEN)

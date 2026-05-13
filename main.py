@@ -401,6 +401,19 @@ async def setchannel(interaction: discord.Interaction):
         ephemeral=True
     )
 
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    await bot.change_presence(
+        status=discord.Status.idle,
+        activity=discord.Activity(
+            type=discord.ActivityType.streaming,
+            name="ai bot",
+            url="https://guns.lol/kimi.i"
+        )
+    )
+    print(f"Запущено за {bot.user}")
+
 
 @client.event
 async def on_message(message: discord.Message):

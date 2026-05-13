@@ -431,7 +431,7 @@ async def on_message(message: discord.Message):
         print(f"Ошибка отправки: {e}")
 
 
-@bot.event
+@client.event
 async def on_ready():
     await bot.tree.sync()
     await bot.change_presence(

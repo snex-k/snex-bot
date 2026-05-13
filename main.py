@@ -431,12 +431,18 @@ async def on_message(message: discord.Message):
         print(f"Ошибка отправки: {e}")
 
 
-@client.event
+@bot.event
 async def on_ready():
-    for guild in client.guilds:
-        await tree.sync(guild=guild)
-    await tree.sync()
-    print(f"Запущен: {client.user}")
+    await bot.tree.sync()
+    await bot.change_presence(
+        status=discord.Status.idle,
+        activity=discord.Activity(
+            type=discord.ActivityType.streaming,
+            name="Ai bot",
+            url="https://guns.lol/kimi.i"
+        )
+    )
+    print(f"Запущено за {bot.user}")
 
 
 client.run(TOKEN)

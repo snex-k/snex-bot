@@ -4,9 +4,10 @@ import aiohttp
 import json
 import urllib.parse
 import re
+import os
 
-TOKEN = "TOKEN"
-GROQ_API_KEY = "GROQ_API_KEY"
+TOKEN = os.environ.get("TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 intents = discord.Intents.default()
 intents.message_content = True

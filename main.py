@@ -119,119 +119,51 @@ async def groq_request(messages, tools=None):
 
 
 async def ai(uid: int, text: str):
-    histories[uid].append({"role": "user", "content": text})
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
-    msg = await groq_request(messages, tools=TOOLS)
+    try:
+        histories[uid].append({"role": "user", "content": text})
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+        msg = await groq_request(messages, tools=TOOLS)
 
-    image_url = None
+        image_url = None
 
-    if msg.get("tool_calls"):
-        histories[uid].append(msg)
-        results = []
-        for call in msg["tool_calls"]:
-            fn = call["function"]["name"]
-            args = json.loads(call["function"]["arguments"])
-            result = await execute_tool(fn, args)
-            if result.startswith("IMAGE:"):
-                image_url = result[6:]
-                result = "Картинка сгенерирована!"
-            results.append(result)
-            histories[uid].append({
-                "role": "tool",
-                "tool_call_id": call["id"],
-                "content": result
-            })
-        messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
-        final = await groq_request(messages2)
-        reply = final.get("content") or "Готово!"
-    else:
-        reply = msg.get("content", "...")
+        if msg.get("tool_calls"):
+            histories[uid].append(msg)
+            results = []
+            for call in msg["tool_calls"]:
+                fn = call["function"]["name"]
+                args = json.loads(call["function"]["arguments"])
+                result = await execute_tool(fn, args)
+                if result.startswith("IMAGE:"):
+                    image_url = result[6:]
+                    result = "Картинка сгенерирована!"
+                results.append(result)
+                histories[uid].append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": result
+                })
+            messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+            final = await groq_request(messages2)
+            reply = final.get("content") or "Готово!"
+        else:
+            reply = msg.get("content", "...")
+            match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
+            if match:
+                prompt = match.group(1)
+                result = await execute_tool("generate_image", {"prompt": prompt})
+                if result.startswith("IMAGE:"):
+                    image_url = result[6:]
+                reply = re.sub(r'[{<\[]?\s*/?function[^>]*>?\s*\{.*?\}\s*<?\s*/?function>?', '', reply, flags=re.DOTALL | re.IGNORECASE)
+                reply = re.sub(r'\{[^{]*"prompt"[^}]*\}', '', reply, flags=re.DOTALL)
+                reply = re.sub(r'</?function[^>]*>', '', reply)
+                reply = re.sub(r'generate_image\s*=?\s*', '', reply)
+                reply = reply.strip() or "**Держи!**"
 
-        # Запасной парсер — если модель написала вызов тексто
-        match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
-        if match:
-            prompt = match.group(1)
-            result = await execute_tool("generate_image", {"prompt": prompt})
-
-
-async def send_v2(
-    channel_id: int,
-    uid: int,
-    text: str,
-    username: str,
-    avatar_url: str,
-    reply_to: int = None,
-    image_url: str = None
-):
-    inner = [
-        {
-            "type": 9,
-            "components": [{"type": 10, "content": f"# **{username}**"}],
-            "accessory": {"type": 11, "media": {"url": avatar_url}},
-        },
-        {"type": 14, "divider": True, "spacing": 1},
-        {"type": 10, "content": text},
-    ]
-
-    if image_url:
-        inner.append({
-            "type": 12,
-            "items": [
-                {
-                    "media": {"url": image_url},
-                    "description": "Сгенерированное изображение"
-                }
-            ]
-        })
-
-    # Разделитель + серая кнопка только с эмодзи
-    inner.append({
-        "type": 1,
-        "components": [
-            {
-                "type": 2,
-                "style": 2,  # серая (Secondary)
-                "custom_id": f"ask_end_{uid}",
-                "emoji": {
-                    "name": "cross",
-                    "id": "1504024178494410865",
-                    "animated": False
-                }
-            }
-        ]
-    })
-
-    payload: dict = {
-        "flags": 32768,
-        "components": [
-            {
-                "type": 17,
-                "components": inner
-            }
-        ]
-    }
-
-    if reply_to:
-        payload["message_reference"] = {
-            "message_id": str(reply_to),
-            "fail_if_not_exists": False
-        }
-
-    headers = {
-        "Authorization": f"Bot {TOKEN}",
-        "Content-Type": "application/json"
-    }
-    async with aiohttp.ClientSession() as s:
-        async with s.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers=headers,
-            data=json.dumps(payload)
-        ) as r:
-            data = await r.json()
-            if r.status not in (200, 201):
-                print(f"Discord ошибка: {data}")
-                raise RuntimeError(str(data))
-            return int(data["id"])
+        histories[uid].append({"role": "assistant", "content": reply})
+        return reply, image_url
+    except Exception as e:
+        print(f"Ошибка в ai(): {e}")
+        return f"Ошибка: {e}", None
 
 
 def is_channel_allowed(guild_id: int, channel_id: int) -> bool:

@@ -202,7 +202,7 @@ async def send_v2(
             {
                 "type": 2,
                 "style": 2,  # серая (Secondary)
-                "custom_id": f"end_dialog_{uid}",
+                "custom_id": f"ask_end_{uid}",
                 "emoji": {
                     "name": "cross",
                     "id": "1504024178494410865",

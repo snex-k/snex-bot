@@ -150,19 +150,16 @@ async def ai(uid: int, text: str):
         match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
         if match:
             prompt = match.group(1)
-            result = await execute_tool("generate_image", {"prompt": prompt})
-            if result.startswith("IMAGE:"):
-                image_url = result[6:]
-            # Убираем весь мусор с function call (любой формат)
-            reply = re.sub(r'\{[^{}]*"prompt"[^{}]*\}', '', reply, flags=re.DOTALL)
-            reply = re.sub(r'</?function[^>]*>', '', reply)
-            reply = re.sub(r'generate_image\s*=?\s*', '', reply)
-            reply = re.sub(r'\s{2,}', ' ', reply).strip()
-            if not reply:
-                reply = "**Держи!**"
-
-    histories[uid].append({"role": "assistant", "content": reply})
-    return reply, image_url
+            result = await
+if tool_name == "generate_image":
+        prompt = args.get("prompt", "beautiful scenery")
+        encoded = urllib.parse.quote(prompt)
+        seed = abs(hash(prompt + str(datetime.datetime.now().minute))) % 99999
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
+        )
+        return f"IMAGE:{url}"
 
 
 async def send_v2(
@@ -269,20 +266,81 @@ async def end_dialog(uid: int, interaction: discord.Interaction):
 
 
 @client.event
+async def show_end_confirmation(uid: int, interaction: discord.Interaction):
+    payload = {
+        "type": 4,
+        "data": {
+            "flags": 32768 | 64,
+            "components": [
+                {
+                    "type": 17,
+                    "components": [
+                        {
+                            "type": 10,
+                            "content": "**Ты точно хочешь завершить диалог?**"
+                        },
+                        {"type": 14, "divider": True, "spacing": 1},
+                        {
+                            "type": 1,
+                            "components": [
+                                {
+                                    "type": 2,
+                                    "style": 3,
+                                    "custom_id": f"confirm_end_{uid}",
+                                    "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}
+                                },
+                                {
+                                    "type": 2,
+                                    "style": 4,
+                                    "custom_id": f"cancel_end_{uid}",
+                                    "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as s:
+        await s.post(
+            f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback",
+            headers=headers,
+            data=json.dumps(payload)
+        )
+
+
+@client.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
         custom_id = interaction.data.get("custom_id", "")
-        if custom_id.startswith("end_dialog_"):
+
+        # Нажали X — показываем подтверждение
+        if custom_id.startswith("ask_end_"):
             try:
-                uid = int(custom_id.split("end_dialog_")[1])
+                uid = int(custom_id.split("ask_end_")[1])
             except ValueError:
                 return
             if interaction.user.id != uid:
-                await interaction.response.send_message(
-                    "Ты не можешь завершить чужой диалог!", ephemeral=True
-                )
+                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
+                return
+            await show_end_confirmation(uid, interaction)
+
+        # Нажали галочку — завершаем
+        elif custom_id.startswith("confirm_end_"):
+            try:
+                uid = int(custom_id.split("confirm_end_")[1])
+            except ValueError:
+                return
+            if interaction.user.id != uid:
+                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
                 return
             await end_dialog(uid, interaction)
+
+        # Нажали крестик — отменяем
+        elif custom_id.startswith("cancel_end_"):
+            await interaction.response.send_message("**Отменено.**", ephemeral=True)
 
 
 @tree.command(name="kimo", description="Чат с ИИ")

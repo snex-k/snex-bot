@@ -465,7 +465,7 @@ async def on_message(message: discord.Message):
 
 @client.event
 async def on_ready():
-    await client.change_presence(status=discord.Status.do_not_disturb)
+    await client.change_presence(status=discord.Status.idle)
     for guild in client.guilds:
         await tree.sync(guild=guild)
     await tree.sync()

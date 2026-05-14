@@ -390,7 +390,7 @@ async def kimo(interaction: discord.Interaction):
     histories[uid] = []
 
     thread = await interaction.channel.create_thread(
-        name=f"kimo · {interaction.user.display_name}",
+        name=f"miko · {interaction.user.display_name}",
         type=discord.ChannelType.private_thread,
         invitable=False,
     )

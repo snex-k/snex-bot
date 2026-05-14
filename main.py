@@ -352,7 +352,7 @@ async def on_interaction(interaction: discord.Interaction):
             await interaction.response.send_message("**Отменено.**", ephemeral=True)
 
 
-@tree.command(name="kimo", description="Чат с ИИ")
+@tree.command(name="miko", description="Чат с ai")
 async def kimo(interaction: discord.Interaction):
     uid = interaction.user.id
     guild_id = interaction.guild_id
@@ -368,7 +368,7 @@ async def kimo(interaction: discord.Interaction):
                 mentions.append(ch.mention)
         mention_str = ", ".join(mentions) if mentions else "нужный канал"
         await interaction.followup.send(
-            f"<a:kaito:1504034420720533538> **Команду /kimo можно использовать только в: {mention_str}**",
+            f"<a:kaito:1504034420720533538> **Команду** `/miko` **можно использовать только в: {mention_str}**",
             ephemeral=True
         )
         return
@@ -411,7 +411,7 @@ async def kimo(interaction: discord.Interaction):
     )
 
 
-@tree.command(name="setchannel", description="Добавить/убрать канал для /kimo (макс 3, только для админов)")
+@tree.command(name="setchannel", description="Добавить/убрать канал для miko (макс 3, admin)")
 async def setchannel(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
@@ -432,7 +432,7 @@ async def setchannel(interaction: discord.Interaction):
         if not ch_list:
             del allowed_channels[guild_id]
             await interaction.response.send_message(
-                "<:checkmark:1504023759101886607> **Канал убран. Теперь /kimo работает везде.**",
+                "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
                 ephemeral=True
             )
         else:

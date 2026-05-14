@@ -231,6 +231,32 @@ async def send_v2(
                 raise RuntimeError(str(data))
             return int(data["id"])
 
+async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
+    payload: dict = {
+        "flags": 32768,
+        "components": [
+            {
+                "type": 17,
+                "accent_color": 0xFF4444,
+                "components": [
+                    {"type": 10, "content": f"<:error:1504479091577983016> **{text}**"}
+                ]
+            }
+        ]
+    }
+    if reply_to:
+        payload["message_reference"] = {
+            "message_id": str(reply_to),
+            "fail_if_not_exists": False
+        }
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as s:
+        await s.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            data=json.dumps(payload)
+        )
+
 
 async def show_end_confirmation(uid: int, interaction: discord.Interaction):
     payload = {
@@ -447,7 +473,7 @@ async def on_message(message: discord.Message):
     async with message.channel.typing():
         result = await ai(uid, message.content)
         if not result:
-            await message.reply("Ошибка: не получил ответ.")
+            await send_error_v2(message.channel.id, f"**Ошибка: {e}**", reply_to=message.id)
             return
         reply, image_url = result
 

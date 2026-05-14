@@ -4,9 +4,11 @@ import aiohttp
 import json
 import urllib.parse
 import re
+import os
+import datetime
 
-TOKEN = "TOKEN"
-GROQ_API_KEY = "GROQ_API_KEY"
+TOKEN = os.environ.get("TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -16,7 +18,7 @@ tree = app_commands.CommandTree(client)
 
 histories: dict[int, list[dict]] = {}
 user_thread: dict[int, int] = {}
-allowed_channels: dict[int, list[int]] = {}  # guild_id -> список каналов (макс 3)
+allowed_channels: dict[int, list[int]] = {}
 
 SYSTEM_PROMPT = (
     "Ты дружелюбный друг, общаешься как живой человек, неформально и просто. "
@@ -24,9 +26,8 @@ SYSTEM_PROMPT = (
     "Пиши как в обычном чате. "
     "ВАЖНО: Всегда отвечай на том же языке, на котором написал пользователь. "
     "ВАЖНО: Всегда оборачивай весь свой ответ в жирный текст — используй ** с обеих сторон. "
-    "Если пользователь просит нарисовать или сгенерировать картинку/изображение — "
+    "Если пользователь просит нарисовать или сгенерировать картинку — "
     "используй инструмент generate_image с описанием на английском."
-    "Не допускай ошибок!"
 )
 
 TOOLS = [
@@ -34,13 +35,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_image",
-            "description": "Сгенерировать изображение по текстовому описанию",
+            "description": "Сгенерировать изображение по описанию",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Описание изображения на английском языке"
+                        "description": "Описание на английском"
                     }
                 },
                 "required": ["prompt"]
@@ -48,19 +49,6 @@ TOOLS = [
         }
     }
 ]
-
-
-async def execute_tool(tool_name: str, args: dict):
-    if tool_name == "generate_image":
-        prompt = args.get("prompt", "beautiful scenery")
-        encoded = urllib.parse.quote(prompt)
-        url = (
-            f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width=1024&height=1024&nologo=true&seed={abs(hash(prompt)) % 99999}"
-        )
-        return f"IMAGE:{url}"
-    return "Неизвестное действие."
-
 
 MODELS = [
     "llama-3.3-70b-versatile",
@@ -70,6 +58,20 @@ MODELS = [
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
 ]
+
+
+async def execute_tool(tool_name: str, args: dict):
+    if tool_name == "generate_image":
+        prompt = args.get("prompt", "beautiful scenery")
+        encoded = urllib.parse.quote(prompt)
+        seed = abs(hash(prompt + str(datetime.datetime.now().minute))) % 99999
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
+        )
+        return f"IMAGE:{url}"
+    return "Неизвестное действие."
+
 
 async def groq_request(messages, tools=None):
     payload_base: dict = {"messages": messages, "max_tokens": 1024}
@@ -92,76 +94,68 @@ async def groq_request(messages, tools=None):
                 ) as r:
                     status = r.status
                     data = await r.json()
-
-            # Проверка по статусу
             if status == 429:
                 print(f"[429] Лимит на {model}, следующая...")
                 continue
-
-            # Проверка по тексту ошибки
             if "choices" not in data:
-                err_msg = data.get("error", {}).get("message", "")
-                last_error = err_msg or str(data)
+                last_error = data.get("error", {}).get("message", str(data))
                 print(f"[ERR] {model}: {last_error}")
                 continue
-
-            print(f"[OK] Использую модель: {model}")
+            print(f"[OK] Модель: {model}")
             return data["choices"][0]["message"]
-
         except Exception as e:
             last_error = str(e)
             print(f"[EXC] {model}: {e}")
             continue
-
-    raise RuntimeError(f"Все модели недоступны. Последняя ошибка: {last_error}")
+    raise RuntimeError(f"Все модели недоступны. Ошибка: {last_error}")
 
 
 async def ai(uid: int, text: str):
-    histories[uid].append({"role": "user", "content": text})
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
-    msg = await groq_request(messages, tools=TOOLS)
+    try:
+        histories[uid].append({"role": "user", "content": text})
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+        msg = await groq_request(messages, tools=TOOLS)
 
-    image_url = None
+        image_url = None
 
-    if msg.get("tool_calls"):
-        histories[uid].append(msg)
-        results = []
-        for call in msg["tool_calls"]:
-            fn = call["function"]["name"]
-            args = json.loads(call["function"]["arguments"])
-            result = await execute_tool(fn, args)
-            if result.startswith("IMAGE:"):
-                image_url = result[6:]
-                result = "Картинка сгенерирована!"
-            results.append(result)
-            histories[uid].append({
-                "role": "tool",
-                "tool_call_id": call["id"],
-                "content": result
-            })
-        messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
-        final = await groq_request(messages2)
-        reply = final.get("content") or "Готово!"
-    else:
-        reply = msg.get("content", "...")
+        if msg.get("tool_calls"):
+            histories[uid].append(msg)
+            results = []
+            for call in msg["tool_calls"]:
+                fn = call["function"]["name"]
+                args = json.loads(call["function"]["arguments"])
+                result = await execute_tool(fn, args)
+                if result.startswith("IMAGE:"):
+                    image_url = result[6:]
+                    result = "Картинка сгенерирована!"
+                results.append(result)
+                histories[uid].append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": result
+                })
+            messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+            final = await groq_request(messages2)
+            reply = final.get("content") or "Готово!"
+        else:
+            reply = msg.get("content", "...")
+            match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
+            if match:
+                prompt = match.group(1)
+                result = await execute_tool("generate_image", {"prompt": prompt})
+                if result.startswith("IMAGE:"):
+                    image_url = result[6:]
+                reply = re.sub(r'[{<\[]?\s*/?function[^>]*>?\s*\{.*?\}\s*<?\s*/?function>?', '', reply, flags=re.DOTALL | re.IGNORECASE)
+                reply = re.sub(r'\{[^{]*"prompt"[^}]*\}', '', reply, flags=re.DOTALL)
+                reply = re.sub(r'</?function[^>]*>', '', reply)
+                reply = re.sub(r'generate_image\s*=?\s*', '', reply)
+                reply = reply.strip() or "**Держи!**"
 
-        # Запасной парсер — если модель написала вызов тексто
-        match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
-        if match:
-            prompt = match.group(1)
-            result = await execute_tool("generate_image", {"prompt": prompt})
-            if result.startswith("IMAGE:"):
-                image_url = result[6:]
-            # Убираем весь мусор с function call (любой формат)
-            reply = re.sub(r'\{[^{}]*"prompt"[^{}]*\}', '', reply, flags=re.DOTALL)
-            reply = re.sub(r'</?function[^>]*>', '', reply)
-            reply = re.sub(r'generate_image\s*=?\s*', '', reply)
-            reply = re.sub(r'\s{2,}', ' ', reply).strip()
-            if not reply:
-                reply = "**Держи!**"
-
-    histories[uid].append({"role": "assistant", "content": reply})
-    return reply, image_url
+        histories[uid].append({"role": "assistant", "content": reply})
+        return reply, image_url
+    except Exception as e:
+        print(f"Ошибка в ai(): {e}")
+        return f"Ошибка: {e}", None
 
 
 async def send_v2(
@@ -194,14 +188,13 @@ async def send_v2(
             ]
         })
 
-    # Разделитель + серая кнопка только с эмодзи
     inner.append({
         "type": 1,
         "components": [
             {
                 "type": 2,
-                "style": 2,  # серая (Secondary)
-                "custom_id": f"end_dialog_{uid}",
+                "style": 2,
+                "custom_id": f"ask_end_{uid}",
                 "emoji": {
                     "name": "cross",
                     "id": "1504024178494410865",
@@ -213,12 +206,7 @@ async def send_v2(
 
     payload: dict = {
         "flags": 32768,
-        "components": [
-            {
-                "type": 17,
-                "components": inner
-            }
-        ]
+        "components": [{"type": 17, "components": inner}]
     }
 
     if reply_to:
@@ -244,11 +232,49 @@ async def send_v2(
             return int(data["id"])
 
 
-def is_channel_allowed(guild_id: int, channel_id: int) -> bool:
-    channels = allowed_channels.get(guild_id)
-    if not channels:
-        return True  # если каналы не заданы — разрешено везде
-    return channel_id in channels
+async def show_end_confirmation(uid: int, interaction: discord.Interaction):
+    payload = {
+        "type": 4,
+        "data": {
+            "flags": 32768 | 64,
+            "components": [
+                {
+                    "type": 17,
+                    "components": [
+                        {
+                            "type": 10,
+                            "content": "**Ты точно хочешь завершить диалог?**"
+                        },
+                        {"type": 14, "divider": True, "spacing": 1},
+                        {
+                            "type": 1,
+                            "components": [
+                                {
+                                    "type": 2,
+                                    "style": 3,
+                                    "custom_id": f"confirm_end_{uid}",
+                                    "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}
+                                },
+                                {
+                                    "type": 2,
+                                    "style": 4,
+                                    "custom_id": f"cancel_end_{uid}",
+                                    "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as s:
+        await s.post(
+            f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback",
+            headers=headers,
+            data=json.dumps(payload)
+        )
 
 
 async def end_dialog(uid: int, interaction: discord.Interaction):
@@ -259,29 +285,46 @@ async def end_dialog(uid: int, interaction: discord.Interaction):
     await interaction.response.send_message("**Чат завершён. Ветка удаляется...**")
     user_thread.pop(uid, None)
     histories.pop(uid, None)
-    channel = interaction.channel
-    if channel:
-        try:
-            await channel.delete()
-        except Exception as e:
-            print(f"Ошибка удаления ветки: {e}")
+    try:
+        await interaction.channel.delete()
+    except Exception as e:
+        print(f"Ошибка удаления ветки: {e}")
+
+
+def is_channel_allowed(guild_id: int, channel_id: int) -> bool:
+    channels = allowed_channels.get(guild_id)
+    if not channels:
+        return True
+    return channel_id in channels
 
 
 @client.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
         custom_id = interaction.data.get("custom_id", "")
-        if custom_id.startswith("end_dialog_"):
+
+        if custom_id.startswith("ask_end_"):
             try:
-                uid = int(custom_id.split("end_dialog_")[1])
+                uid = int(custom_id.split("ask_end_")[1])
             except ValueError:
                 return
             if interaction.user.id != uid:
-                await interaction.response.send_message(
-                    "Ты не можешь завершить чужой диалог!", ephemeral=True
-                )
+                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
+                return
+            await show_end_confirmation(uid, interaction)
+
+        elif custom_id.startswith("confirm_end_"):
+            try:
+                uid = int(custom_id.split("confirm_end_")[1])
+            except ValueError:
+                return
+            if interaction.user.id != uid:
+                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
                 return
             await end_dialog(uid, interaction)
+
+        elif custom_id.startswith("cancel_end_"):
+            await interaction.response.send_message("**Отменено.**", ephemeral=True)
 
 
 @tree.command(name="kimo", description="Чат с ИИ")
@@ -291,7 +334,6 @@ async def kimo(interaction: discord.Interaction):
 
     await interaction.response.defer(ephemeral=True)
 
-    # Проверка разрешённых каналов
     if not is_channel_allowed(guild_id, interaction.channel_id):
         channels = allowed_channels.get(guild_id, [])
         mentions = []
@@ -306,7 +348,6 @@ async def kimo(interaction: discord.Interaction):
         )
         return
 
-    # Если у пользователя уже есть активная ветка — не создаём новую
     existing_thread_id = user_thread.get(uid)
     if existing_thread_id:
         existing_thread = interaction.guild.get_channel(existing_thread_id)
@@ -318,7 +359,6 @@ async def kimo(interaction: discord.Interaction):
             )
             return
         else:
-            # Ветка была удалена вручную — очищаем
             user_thread.pop(uid, None)
             histories.pop(uid, None)
 
@@ -362,41 +402,36 @@ async def setchannel(interaction: discord.Interaction):
 
     ch_list = allowed_channels[guild_id]
 
-    # Если канал уже в списке — убираем (toggle)
     if channel_id in ch_list:
         ch_list.remove(channel_id)
         if not ch_list:
             del allowed_channels[guild_id]
             await interaction.response.send_message(
-                "<:checkmark:1504023759101886607> **Этот канал убран. Теперь /kimo работает везде.**",
+                "<:checkmark:1504023759101886607> **Канал убран. Теперь /kimo работает везде.**",
                 ephemeral=True
             )
         else:
             mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
             await interaction.response.send_message(
-                f"<:checkmark:1504023759101886607> **Канал убран из списка.**\n"
-                f"Активные каналы: {', '.join(mentions)}",
+                f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}",
                 ephemeral=True
             )
         return
 
-    # Если уже 3 — отказываем
     if len(ch_list) >= 3:
         mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
         await interaction.response.send_message(
             f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\n"
-            f"Текущие каналы: {', '.join(mentions)}\n"
-            f"Введи `/setchannel` в одном из них чтобы убрать его.",
+            f"Текущие: {', '.join(mentions)}\n"
+            f"Введи `/setchannel` в одном из них чтобы убрать.",
             ephemeral=True
         )
         return
 
-    # Добавляем канал
     ch_list.append(channel_id)
     mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
     await interaction.response.send_message(
-        f"<:checkmark:1504023759101886607> **Канал добавлен!**\n"
-        f"Активные каналы: {', '.join(mentions)}",
+        f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}",
         ephemeral=True
     )
 
@@ -411,12 +446,11 @@ async def on_message(message: discord.Message):
         return
 
     async with message.channel.typing():
-        try:
-            reply, image_url = await ai(uid, message.content)
-        except Exception as e:
-            print(f"Ошибка ИИ: {e}")
-            await message.reply(f"Ошибка: {e}")
+        result = await ai(uid, message.content)
+        if not result:
+            await message.reply("Ошибка: не получил ответ.")
             return
+        reply, image_url = result
 
     try:
         await send_v2(
@@ -432,6 +466,7 @@ async def on_message(message: discord.Message):
 
 @client.event
 async def on_ready():
+    await client.change_presence(status=discord.Status.do_not_disturb)
     for guild in client.guilds:
         await tree.sync(guild=guild)
     await tree.sync()

@@ -245,7 +245,6 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
                             "type": 10,
                             "content": "**Ты точно хочешь завершить диалог?**"
                         },
-                        {"type": 14, "divider": True, "spacing": 1},
                         {
                             "type": 1,
                             "components": [
@@ -260,7 +259,6 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
                                     "style": 2,
                                     "custom_id": f"cancel_end_{uid}",
                                     "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
-                                }
                                 }
                             ]
                         }

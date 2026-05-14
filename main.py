@@ -463,7 +463,11 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         try:
-            reply, image_url = await ai(uid, message.content)
+            result = await ai(uid, message.content)
+if not result:
+    await message.reply("Ошибка: не получил ответ.")
+    return
+reply, image_url = result
         except Exception as e:
             print(f"Ошибка ИИ: {e}")
             await message.reply(f"Ошибка: {e}")

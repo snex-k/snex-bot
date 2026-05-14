@@ -151,16 +151,7 @@ async def ai(uid: int, text: str):
         match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
         if match:
             prompt = match.group(1)
-            result = await
-if tool_name == "generate_image":
-        prompt = args.get("prompt", "beautiful scenery")
-        encoded = urllib.parse.quote(prompt)
-        seed = abs(hash(prompt + str(datetime.datetime.now().minute))) % 99999
-        url = (
-            f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
-        )
-        return f"IMAGE:{url}"
+            result = await execute_tool("generate_image", {"prompt": prompt})
 
 
 async def send_v2(

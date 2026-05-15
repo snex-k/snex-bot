@@ -6,6 +6,7 @@ import urllib.parse
 import re
 import os
 import datetime
+import unicodedata
 
 TOKEN = os.environ.get("TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
@@ -24,15 +25,21 @@ SYSTEM_PROMPT = (
     "Тебя зовут Miko. Ты милая и дружелюбная девушка, общаешься как живой человек, неформально и просто. "
     "Отвечай коротко и по делу, без лишней воды. Не используй списки и заголовки. "
     "Пиши как в обычном чате. "
-    "КРИТИЧЕСКИ ВАЖНО — ЯЗЫК: Ты ОБЯЗАНА отвечать на том же языке, на котором написано последнее сообщение пользователя. "
-    "Если пользователь пишет на английском — отвечай ТОЛЬКО на английском. "
-    "Если на русском — только на русском. Никаких исключений. Не смешивай языки. "
     "ВАЖНО — ИМЯ: Используй имя пользователя ТОЛЬКО один раз — в самом первом приветствии. "
     "После этого НЕ упоминай имя вообще. Это выглядит неестественно. "
     "ВАЖНО: Всегда оборачивай весь свой ответ в жирный текст — используй ** с обеих сторон. "
     "Если пользователь просит нарисовать или сгенерировать картинку — "
     "используй инструмент generate_image с описанием на английском."
 )
+
+
+def detect_language(text: str) -> str:
+    cyrillic = sum(1 for c in text if unicodedata.category(c) in ("Ll", "Lu") and "CYRILLIC" in unicodedata.name(c, ""))
+    latin = sum(1 for c in text if unicodedata.category(c) in ("Ll", "Lu") and "LATIN" in unicodedata.name(c, ""))
+    if cyrillic > latin:
+        return "Russian"
+    return "English"
+
 
 TOOLS = [
     {
@@ -111,13 +118,15 @@ async def groq_request(messages, tools=None):
     raise RuntimeError(f"Все модели недоступны. Ошибка: {last_error}")
 
 
-async def ai(uid: int, text: str, username: str = "пользователь"):
+async def ai(uid: int, text: str, username: str = "пользователь", force_lang: str = None):
     try:
+        lang = force_lang or detect_language(text)
         histories[uid].append({"role": "user", "content": text})
 
         system_with_user = (
             SYSTEM_PROMPT +
             f"\nИмя пользователя: {username}."
+            f"\n\nCRITICAL: You MUST reply ONLY in {lang}. Absolutely no other language. No mixing."
         )
 
         messages = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
@@ -414,7 +423,8 @@ async def miko(interaction: discord.Interaction):
     greeting, image_url = await ai(
         uid,
         f"[SYSTEM] New chat started. Greet the user by their name '{display_name}' briefly and naturally. Use the name only in this greeting.",
-        username=display_name
+        username=display_name,
+        force_lang="Russian"
     )
     await send_v2(
         thread.id, uid, greeting,

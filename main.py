@@ -50,7 +50,6 @@ TOOLS = [
     }
 ]
 
-# Только рабочие модели Groq (без снятых с поддержки)
 MODELS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
@@ -108,10 +107,17 @@ async def groq_request(messages, tools=None):
     raise RuntimeError(f"Все модели недоступны. Ошибка: {last_error}")
 
 
-async def ai(uid: int, text: str):
+async def ai(uid: int, text: str, username: str = "пользователь"):
     try:
         histories[uid].append({"role": "user", "content": text})
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid][-30:]
+
+        system_with_user = (
+            SYSTEM_PROMPT +
+            f"\nСейчас ты разговариваешь с пользователем по имени {username}. "
+            "Обращайся к нему по имени когда это уместно и естественно."
+        )
+
+        messages = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
         msg = await groq_request(messages, tools=TOOLS)
 
         image_url = None
@@ -132,7 +138,7 @@ async def ai(uid: int, text: str):
                     "tool_call_id": call["id"],
                     "content": result
                 })
-            messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid][-30:]
+            messages2 = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
             final = await groq_request(messages2)
             reply = final.get("content") or "Готово!"
         else:
@@ -355,6 +361,7 @@ async def on_interaction(interaction: discord.Interaction):
 async def miko(interaction: discord.Interaction):
     uid = interaction.user.id
     guild_id = interaction.guild_id
+    display_name = interaction.user.display_name
 
     await interaction.response.defer(ephemeral=True)
 
@@ -389,7 +396,7 @@ async def miko(interaction: discord.Interaction):
     histories[uid] = []
 
     thread = await interaction.channel.create_thread(
-        name=f"miko · {interaction.user.display_name}",
+        name=f"miko · {display_name}",
         type=discord.ChannelType.private_thread,
         invitable=False,
     )
@@ -401,10 +408,14 @@ async def miko(interaction: discord.Interaction):
         ephemeral=True
     )
 
-    greeting, image_url = await ai(uid, "Поприветствуй меня коротко на русском языке!")
+    greeting, image_url = await ai(
+        uid,
+        f"Поприветствуй меня коротко! Моё имя {display_name}.",
+        username=display_name
+    )
     await send_v2(
         thread.id, uid, greeting,
-        interaction.user.display_name,
+        display_name,
         interaction.user.display_avatar.url,
         image_url=image_url
     )
@@ -469,9 +480,11 @@ async def on_message(message: discord.Message):
     if not thread_id or message.channel.id != thread_id:
         return
 
+    display_name = message.author.display_name
+
     async with message.channel.typing():
         try:
-            reply, image_url = await ai(uid, message.content)
+            reply, image_url = await ai(uid, message.content, username=display_name)
         except Exception as e:
             await send_error_v2(message.channel.id, f"Ошибка: {e}", reply_to=message.id)
             return
@@ -479,7 +492,7 @@ async def on_message(message: discord.Message):
     try:
         await send_v2(
             message.channel.id, uid, reply,
-            message.author.display_name,
+            display_name,
             message.author.display_avatar.url,
             reply_to=message.id,
             image_url=image_url

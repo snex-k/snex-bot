@@ -50,13 +50,11 @@ TOOLS = [
     }
 ]
 
+# Только рабочие модели Groq (без снятых с поддержки)
 MODELS = [
     "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
     "llama-3.1-8b-instant",
     "mixtral-8x7b-32768",
-    "gemma2-9b-it",
 ]
 
 
@@ -113,7 +111,7 @@ async def groq_request(messages, tools=None):
 async def ai(uid: int, text: str):
     try:
         histories[uid].append({"role": "user", "content": text})
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid][-30:]
         msg = await groq_request(messages, tools=TOOLS)
 
         image_url = None
@@ -134,7 +132,7 @@ async def ai(uid: int, text: str):
                     "tool_call_id": call["id"],
                     "content": result
                 })
-            messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid]
+            messages2 = [{"role": "system", "content": SYSTEM_PROMPT}] + histories[uid][-30:]
             final = await groq_request(messages2)
             reply = final.get("content") or "Готово!"
         else:
@@ -230,6 +228,7 @@ async def send_v2(
                 print(f"Discord ошибка: {data}")
                 raise RuntimeError(str(data))
             return int(data["id"])
+
 
 async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
     payload: dict = {
@@ -353,7 +352,7 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 @tree.command(name="miko", description="Чат с ai")
-async def kimo(interaction: discord.Interaction):
+async def miko(interaction: discord.Interaction):
     uid = interaction.user.id
     guild_id = interaction.guild_id
 
@@ -471,11 +470,11 @@ async def on_message(message: discord.Message):
         return
 
     async with message.channel.typing():
-        result = await ai(uid, message.content)
-        if not result:
-            await send_error_v2(message.channel.id, f"**Ошибка: {e}**", reply_to=message.id)
+        try:
+            reply, image_url = await ai(uid, message.content)
+        except Exception as e:
+            await send_error_v2(message.channel.id, f"Ошибка: {e}", reply_to=message.id)
             return
-        reply, image_url = result
 
     try:
         await send_v2(

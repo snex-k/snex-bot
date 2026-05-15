@@ -25,20 +25,24 @@ SYSTEM_PROMPT_RU = (
     "Тебя зовут Miko. Ты милая и дружелюбная девушка, общаешься как живой человек, неформально и просто. "
     "Отвечай коротко и по делу, без лишней воды. Не используй списки и заголовки. "
     "Пиши как в обычном чате. "
+    "ОБРАЩЕНИЕ: Всегда говори с пользователем на 'ты', никогда на 'вы'. "
     "ЯЗЫК: Отвечай ТОЛЬКО на русском языке. Ни одного английского слова в ответе. "
     "ИМЯ: Используй имя пользователя только один раз в первом приветствии, потом не упоминай. "
     "Всегда оборачивай весь ответ в жирный текст — ** с обеих сторон. "
-    "Если пользователь ЯВНО просит нарисовать или сгенерировать картинку — используй инструмент generate_image с описанием на английском. "
+    "Если пользователь ЯВНО просит нарисовать или сгенерировать картинку — используй инструмент generate_image. "
+    "При вызове generate_image ОБЯЗАТЕЛЬНО передавай параметр prompt с описанием на английском. "
     "НИКОГДА не генерируй картинки по своей инициативе без явной просьбы пользователя."
 )
 
 SYSTEM_PROMPT_EN = (
     "Your name is Miko. You are a friendly girl, you talk like a real person — casual and simple. "
     "Keep answers short and to the point. No lists, no headers. Write like in a normal chat. "
+    "ADDRESS: Always use informal 'you' (casual tone), never formal. "
     "LANGUAGE: Reply ONLY in English. Not a single word in any other language. "
     "NAME: Use the user's name only once in the first greeting, never mention it again. "
     "Always wrap your entire reply in bold text — use ** on both sides. "
     "Only use generate_image when the user EXPLICITLY asks to draw or generate an image. "
+    "When calling generate_image, ALWAYS include the prompt parameter with an English description. "
     "NEVER generate images on your own initiative."
 )
 
@@ -56,16 +60,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_image",
-            "description": "Generate an image from a description",
+            "description": "Generate an image. Always pass the prompt parameter with a detailed English description of what to draw.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Description in English"
+                        "description": "Detailed description of the image in English. Required."
                     }
                 },
-                "required": ["prompt"]
+                "required": []
             }
         }
     }
@@ -92,7 +96,7 @@ async def execute_tool(tool_name: str, args: dict):
                     if r.status == 200:
                         image_bytes = await r.read()
                         print(f"[IMG] Downloaded {len(image_bytes)} bytes")
-                        return f"IMAGE:{url}", image_bytes
+                        return f"IMAGE_BYTES:{url}", image_bytes
         except Exception as e:
             print(f"[IMG] Download failed: {e}")
         return f"IMAGE:{url}", None
@@ -153,16 +157,14 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
 
         if msg.get("tool_calls"):
             histories[uid].append(msg)
-            results = []
             for call in msg["tool_calls"]:
                 fn = call["function"]["name"]
                 args = json.loads(call["function"]["arguments"])
                 tool_result, img_data = await execute_tool(fn, args)
                 if tool_result.startswith("IMAGE"):
-                    image_url = tool_result.split(":", 2)[1] if ":" in tool_result else tool_result
+                    image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
                     image_bytes = img_data
                     tool_result = "Картинка сгенерирована!"
-                results.append(tool_result)
                 histories[uid].append({
                     "role": "tool",
                     "tool_call_id": call["id"],
@@ -243,12 +245,20 @@ async def send_v2(
             form = aiohttp.FormData()
             form.add_field("payload_json", json.dumps(payload), content_type="application/json")
             form.add_field("files[0]", image_bytes, filename="image.jpg", content_type="image/jpeg")
-            async with s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=form) as r:
+            async with s.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=headers,
+                data=form
+            ) as r:
                 data = await r.json()
                 status = r.status
         else:
             headers["Content-Type"] = "application/json"
-            async with s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=json.dumps(payload)) as r:
+            async with s.post(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=headers,
+                data=json.dumps(payload)
+            ) as r:
                 data = await r.json()
                 status = r.status
 
@@ -275,7 +285,11 @@ async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
         payload["message_reference"] = {"message_id": str(reply_to), "fail_if_not_exists": False}
     headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        await s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=json.dumps(payload))
+        await s.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            data=json.dumps(payload)
+        )
 
 
 async def show_end_confirmation(uid: int, interaction: discord.Interaction):
@@ -291,8 +305,18 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
                         {
                             "type": 1,
                             "components": [
-                                {"type": 2, "style": 2, "custom_id": f"confirm_end_{uid}", "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}},
-                                {"type": 2, "style": 2, "custom_id": f"cancel_end_{uid}", "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}}
+                                {
+                                    "type": 2,
+                                    "style": 2,
+                                    "custom_id": f"confirm_end_{uid}",
+                                    "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}
+                                },
+                                {
+                                    "type": 2,
+                                    "style": 2,
+                                    "custom_id": f"cancel_end_{uid}",
+                                    "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
+                                }
                             ]
                         }
                     ]
@@ -302,7 +326,11 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
     }
     headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        await s.post(f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback", headers=headers, data=json.dumps(payload))
+        await s.post(
+            f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback",
+            headers=headers,
+            data=json.dumps(payload)
+        )
 
 
 async def end_dialog(uid: int, interaction: discord.Interaction):
@@ -429,7 +457,9 @@ async def miko(interaction: discord.Interaction):
 @tree.command(name="setchannel", description="Добавить/убрать канал для miko (макс 3, admin)")
 async def setchannel(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True)
+        await interaction.response.send_message(
+            "<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True
+        )
         return
 
     guild_id = interaction.guild_id
@@ -444,23 +474,34 @@ async def setchannel(interaction: discord.Interaction):
         ch_list.remove(channel_id)
         if not ch_list:
             del allowed_channels[guild_id]
-            await interaction.response.send_message("<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**", ephemeral=True)
+            await interaction.response.send_message(
+                "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
+                ephemeral=True
+            )
         else:
             mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
-            await interaction.response.send_message(f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}", ephemeral=True)
+            await interaction.response.send_message(
+                f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}",
+                ephemeral=True
+            )
         return
 
     if len(ch_list) >= 3:
         mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
         await interaction.response.send_message(
-            f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\nТекущие: {', '.join(mentions)}\nВведи `/setchannel` в одном из них чтобы убрать.",
+            f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\n"
+            f"Текущие: {', '.join(mentions)}\n"
+            f"Введи `/setchannel` в одном из них чтобы убрать.",
             ephemeral=True
         )
         return
 
     ch_list.append(channel_id)
     mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
-    await interaction.response.send_message(f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}", ephemeral=True)
+    await interaction.response.send_message(
+        f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}",
+        ephemeral=True
+    )
 
 
 @client.event
@@ -468,10 +509,8 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
     uid = message.author.id
-
     channel = message.channel
     thread_id = user_thread.get(uid)
-
     if not thread_id or message.channel.id != thread_id:
         if (
             isinstance(channel, discord.Thread) and
@@ -482,16 +521,13 @@ async def on_message(message: discord.Message):
                 histories[uid] = []
         else:
             return
-
     display_name = message.author.display_name
-
     async with message.channel.typing():
         try:
             reply, image_url, image_bytes = await ai(uid, message.content, username=display_name)
         except Exception as e:
             await send_error_v2(message.channel.id, f"Ошибка: {e}", reply_to=message.id)
             return
-
     try:
         await send_v2(
             message.channel.id, uid, reply,
@@ -503,8 +539,6 @@ async def on_message(message: discord.Message):
         )
     except Exception as e:
         print(f"Ошибка отправки: {e}")
-
-
 @client.event
 async def on_ready():
     await client.change_presence(status=discord.Status.idle)
@@ -512,6 +546,5 @@ async def on_ready():
         await tree.sync(guild=guild)
     await tree.sync()
     print(f"Запущен: {client.user}")
-
-
+    
 client.run(TOKEN)

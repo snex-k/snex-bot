@@ -334,24 +334,25 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
 
 
 async def end_dialog(uid: int, interaction: discord.Interaction):
+    channel = interaction.channel
+    is_miko_thread = (
+        isinstance(channel, discord.Thread) and
+        channel.name.startswith("miko ·")
+    )
     thread_id = user_thread.get(uid)
-    if not thread_id or interaction.channel_id != thread_id:
+    in_memory = thread_id and interaction.channel_id == thread_id
+
+    if not in_memory and not is_miko_thread:
         await interaction.response.send_message("Диалог не найден.", ephemeral=True)
         return
+
     await interaction.response.send_message("**Чат завершён. Ветка удаляется...**")
     user_thread.pop(uid, None)
     histories.pop(uid, None)
     try:
-        await interaction.channel.delete()
+        await channel.delete()
     except Exception as e:
         print(f"Ошибка удаления ветки: {e}")
-
-
-def is_channel_allowed(guild_id: int, channel_id: int) -> bool:
-    channels = allowed_channels.get(guild_id)
-    if not channels:
-        return True
-    return channel_id in channels
 
 
 @client.event
@@ -503,9 +504,19 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
     uid = message.author.id
+    channel = message.channel
     thread_id = user_thread.get(uid)
+
     if not thread_id or message.channel.id != thread_id:
-        return
+        if (
+            isinstance(channel, discord.Thread) and
+            channel.name == f"miko · {message.author.display_name}"
+        ):
+            user_thread[uid] = channel.id
+            if uid not in histories:
+                histories[uid] = []
+        else:
+            return
 
     display_name = message.author.display_name
 

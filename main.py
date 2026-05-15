@@ -85,10 +85,9 @@ async def execute_tool(tool_name: str, args: dict):
             f"https://image.pollinations.ai/prompt/{encoded}"
             f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
         )
-        # Pre-fetch the image so it's ready when Discord loads it
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
-                async with s.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as s:
+                async with s.get(url) as r:
                     await r.read()
                     print(f"[IMG] Pre-fetched: {r.status}")
         except Exception as e:
@@ -110,7 +109,7 @@ async def groq_request(messages, tools=None):
     for model in MODELS:
         try:
             payload = {**payload_base, "model": model}
-            async with aiohttp.ClientSession() as s:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
                 async with s.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers=headers,
@@ -355,6 +354,13 @@ async def end_dialog(uid: int, interaction: discord.Interaction):
         print(f"Ошибка удаления ветки: {e}")
 
 
+def is_channel_allowed(guild_id: int, channel_id: int) -> bool:
+    channels = allowed_channels.get(guild_id)
+    if not channels:
+        return True
+    return channel_id in channels
+
+
 @client.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type == discord.InteractionType.component:
@@ -504,6 +510,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
     uid = message.author.id
+
     channel = message.channel
     thread_id = user_thread.get(uid)
 

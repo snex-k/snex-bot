@@ -87,7 +87,7 @@ async def execute_tool(tool_name: str, args: dict):
         )
         # Pre-fetch the image so it's ready when Discord loads it
         try:
-            async with aiohttp.ClientSession() as s:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
                 async with s.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
                     await r.read()
                     print(f"[IMG] Pre-fetched: {r.status}")

@@ -28,6 +28,8 @@ SYSTEM_PROMPT_RU = (
     "ЯЗЫК: Отвечай ТОЛЬКО на русском языке. Ни одного английского слова в ответе. "
     "ИМЯ: Используй имя пользователя только один раз в первом приветствии, потом не упоминай. "
     "Всегда оборачивай весь ответ в жирный текст — ** с обеих сторон. "
+    "Если пользователь ЯВНО просит нарисовать или сгенерировать картинку — используй инструмент generate_image с описанием на английском. "
+    "НИКОГДА не генерируй картинки по своей инициативе без явной просьбы пользователя."
     "Если просят нарисовать картинку — используй инструмент generate_image с описанием на английском."
 )
 
@@ -168,17 +170,10 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
             reply = final.get("content") or "Готово!"
         else:
             reply = msg.get("content", "...")
-            match = re.search(r'"prompt"\s*:\s*"([^"]+)"', reply)
-            if match:
-                prompt = match.group(1)
-                result = await execute_tool("generate_image", {"prompt": prompt})
-                if result.startswith("IMAGE:"):
-                    image_url = result[6:]
-                reply = re.sub(r'[{<\[]?\s*/?function[^>]*>?\s*\{.*?\}\s*<?\s*/?function>?', '', reply, flags=re.DOTALL | re.IGNORECASE)
-                reply = re.sub(r'\{[^{]*"prompt"[^}]*\}', '', reply, flags=re.DOTALL)
-                reply = re.sub(r'</?function[^>]*>', '', reply)
-                reply = re.sub(r'generate_image\s*=?\s*', '', reply)
-                reply = reply.strip() or "**Держи!**"
+            reply = re.sub(r'<function=[^>]+>\{.*?\}</function>', '', reply, flags=re.DOTALL)
+            reply = re.sub(r'</?function[^>]*>', '', reply)
+            reply = re.sub(r'generate_image\s*=?\s*\{[^}]*\}', '', reply, flags=re.DOTALL)
+            reply = reply.strip() or "**...**"
 
         histories[uid].append({"role": "assistant", "content": reply})
         return reply, image_url

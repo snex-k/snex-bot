@@ -21,15 +21,23 @@ histories: dict[int, list[dict]] = {}
 user_thread: dict[int, int] = {}
 allowed_channels: dict[int, list[int]] = {}
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_RU = (
     "Тебя зовут Miko. Ты милая и дружелюбная девушка, общаешься как живой человек, неформально и просто. "
     "Отвечай коротко и по делу, без лишней воды. Не используй списки и заголовки. "
     "Пиши как в обычном чате. "
-    "ВАЖНО — ИМЯ: Используй имя пользователя ТОЛЬКО один раз — в самом первом приветствии. "
-    "После этого НЕ упоминай имя вообще. Это выглядит неестественно. "
-    "ВАЖНО: Всегда оборачивай весь свой ответ в жирный текст — используй ** с обеих сторон. "
-    "Если пользователь просит нарисовать или сгенерировать картинку — "
-    "используй инструмент generate_image с описанием на английском."
+    "ЯЗЫК: Отвечай ТОЛЬКО на русском языке. Ни одного английского слова в ответе. "
+    "ИМЯ: Используй имя пользователя только один раз в первом приветствии, потом не упоминай. "
+    "Всегда оборачивай весь ответ в жирный текст — ** с обеих сторон. "
+    "Если просят нарисовать картинку — используй инструмент generate_image с описанием на английском."
+)
+
+SYSTEM_PROMPT_EN = (
+    "Your name is Miko. You are a friendly girl, you talk like a real person — casual and simple. "
+    "Keep answers short and to the point. No lists, no headers. Write like in a normal chat. "
+    "LANGUAGE: Reply ONLY in English. Not a single word in any other language. "
+    "NAME: Use the user's name only once in the first greeting, never mention it again. "
+    "Always wrap your entire reply in bold text — use ** on both sides. "
+    "If the user asks to draw or generate an image — use the generate_image tool with an English description."
 )
 
 
@@ -46,13 +54,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "generate_image",
-            "description": "Сгенерировать изображение по описанию",
+            "description": "Generate an image from a description",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "Описание на английском"
+                        "description": "Description in English"
                     }
                 },
                 "required": ["prompt"]
@@ -77,6 +85,14 @@ async def execute_tool(tool_name: str, args: dict):
             f"https://image.pollinations.ai/prompt/{encoded}"
             f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
         )
+        # Pre-fetch the image so it's ready when Discord loads it
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    await r.read()
+                    print(f"[IMG] Pre-fetched: {r.status}")
+        except Exception as e:
+            print(f"[IMG] Pre-fetch failed: {e}")
         return f"IMAGE:{url}"
     return "Неизвестное действие."
 
@@ -123,11 +139,9 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
         lang = force_lang or detect_language(text)
         histories[uid].append({"role": "user", "content": text})
 
-        system_with_user = (
-            SYSTEM_PROMPT +
-            f"\nИмя пользователя: {username}."
-            f"\n\nCRITICAL: You MUST reply ONLY in {lang}. Absolutely no other language. No mixing."
-        )
+        base_prompt = SYSTEM_PROMPT_RU if lang == "Russian" else SYSTEM_PROMPT_EN
+        name_label = "Имя пользователя" if lang == "Russian" else "User's name"
+        system_with_user = base_prompt + f"\n{name_label}: {username}."
 
         messages = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
         msg = await groq_request(messages, tools=TOOLS)
@@ -422,7 +436,7 @@ async def miko(interaction: discord.Interaction):
 
     greeting, image_url = await ai(
         uid,
-        f"[SYSTEM] New chat started. Greet the user by their name '{display_name}' briefly and naturally. Use the name only in this greeting.",
+        f"Поприветствуй меня коротко, моё имя {display_name}.",
         username=display_name,
         force_lang="Russian"
     )

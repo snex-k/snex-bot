@@ -30,7 +30,6 @@ SYSTEM_PROMPT_RU = (
     "Всегда оборачивай весь ответ в жирный текст — ** с обеих сторон. "
     "Если пользователь ЯВНО просит нарисовать или сгенерировать картинку — используй инструмент generate_image с описанием на английском. "
     "НИКОГДА не генерируй картинки по своей инициативе без явной просьбы пользователя."
-    "Если просят нарисовать картинку — используй инструмент generate_image с описанием на английском."
 )
 
 SYSTEM_PROMPT_EN = (
@@ -39,7 +38,8 @@ SYSTEM_PROMPT_EN = (
     "LANGUAGE: Reply ONLY in English. Not a single word in any other language. "
     "NAME: Use the user's name only once in the first greeting, never mention it again. "
     "Always wrap your entire reply in bold text — use ** on both sides. "
-    "If the user asks to draw or generate an image — use the generate_image tool with an English description."
+    "Only use generate_image when the user EXPLICITLY asks to draw or generate an image. "
+    "NEVER generate images on your own initiative."
 )
 
 
@@ -74,7 +74,6 @@ TOOLS = [
 MODELS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
 ]
 
 
@@ -88,14 +87,16 @@ async def execute_tool(tool_name: str, args: dict):
             f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
         )
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as s:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=45)) as s:
                 async with s.get(url) as r:
-                    await r.read()
-                    print(f"[IMG] Pre-fetched: {r.status}")
+                    if r.status == 200:
+                        image_bytes = await r.read()
+                        print(f"[IMG] Downloaded {len(image_bytes)} bytes")
+                        return f"IMAGE:{url}", image_bytes
         except Exception as e:
-            print(f"[IMG] Pre-fetch failed: {e}")
-        return f"IMAGE:{url}"
-    return "Неизвестное действие."
+            print(f"[IMG] Download failed: {e}")
+        return f"IMAGE:{url}", None
+    return "Неизвестное действие.", None
 
 
 async def groq_request(messages, tools=None):
@@ -148,6 +149,7 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
         msg = await groq_request(messages, tools=TOOLS)
 
         image_url = None
+        image_bytes = None
 
         if msg.get("tool_calls"):
             histories[uid].append(msg)
@@ -155,15 +157,16 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
             for call in msg["tool_calls"]:
                 fn = call["function"]["name"]
                 args = json.loads(call["function"]["arguments"])
-                result = await execute_tool(fn, args)
-                if result.startswith("IMAGE:"):
-                    image_url = result[6:]
-                    result = "Картинка сгенерирована!"
-                results.append(result)
+                tool_result, img_data = await execute_tool(fn, args)
+                if tool_result.startswith("IMAGE"):
+                    image_url = tool_result.split(":", 2)[1] if ":" in tool_result else tool_result
+                    image_bytes = img_data
+                    tool_result = "Картинка сгенерирована!"
+                results.append(tool_result)
                 histories[uid].append({
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": result
+                    "content": tool_result
                 })
             messages2 = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
             final = await groq_request(messages2)
@@ -176,10 +179,10 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
             reply = reply.strip() or "**...**"
 
         histories[uid].append({"role": "assistant", "content": reply})
-        return reply, image_url
+        return reply, image_url, image_bytes
     except Exception as e:
         print(f"Ошибка в ai(): {e}")
-        return f"Ошибка: {e}", None
+        return f"Ошибка: {e}", None, None
 
 
 async def send_v2(
@@ -189,7 +192,8 @@ async def send_v2(
     username: str,
     avatar_url: str,
     reply_to: int = None,
-    image_url: str = None
+    image_url: str = None,
+    image_bytes: bytes = None
 ):
     inner = [
         {
@@ -201,15 +205,16 @@ async def send_v2(
         {"type": 10, "content": text},
     ]
 
-    if image_url:
+    use_file = image_bytes is not None
+    if use_file:
         inner.append({
             "type": 12,
-            "items": [
-                {
-                    "media": {"url": image_url},
-                    "description": "Сгенерированное изображение"
-                }
-            ]
+            "items": [{"media": {"url": "attachment://image.jpg"}, "description": "Сгенерированное изображение"}]
+        })
+    elif image_url:
+        inner.append({
+            "type": 12,
+            "items": [{"media": {"url": image_url}, "description": "Сгенерированное изображение"}]
         })
 
     inner.append({
@@ -219,11 +224,7 @@ async def send_v2(
                 "type": 2,
                 "style": 2,
                 "custom_id": f"ask_end_{uid}",
-                "emoji": {
-                    "name": "cross",
-                    "id": "1504024178494410865",
-                    "animated": False
-                }
+                "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
             }
         ]
     })
@@ -234,26 +235,27 @@ async def send_v2(
     }
 
     if reply_to:
-        payload["message_reference"] = {
-            "message_id": str(reply_to),
-            "fail_if_not_exists": False
-        }
+        payload["message_reference"] = {"message_id": str(reply_to), "fail_if_not_exists": False}
 
-    headers = {
-        "Authorization": f"Bot {TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bot {TOKEN}"}
     async with aiohttp.ClientSession() as s:
-        async with s.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers=headers,
-            data=json.dumps(payload)
-        ) as r:
-            data = await r.json()
-            if r.status not in (200, 201):
-                print(f"Discord ошибка: {data}")
-                raise RuntimeError(str(data))
-            return int(data["id"])
+        if use_file:
+            form = aiohttp.FormData()
+            form.add_field("payload_json", json.dumps(payload), content_type="application/json")
+            form.add_field("files[0]", image_bytes, filename="image.jpg", content_type="image/jpeg")
+            async with s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=form) as r:
+                data = await r.json()
+                status = r.status
+        else:
+            headers["Content-Type"] = "application/json"
+            async with s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=json.dumps(payload)) as r:
+                data = await r.json()
+                status = r.status
+
+    if status not in (200, 201):
+        print(f"Discord ошибка: {data}")
+        raise RuntimeError(str(data))
+    return int(data["id"])
 
 
 async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
@@ -270,17 +272,10 @@ async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
         ]
     }
     if reply_to:
-        payload["message_reference"] = {
-            "message_id": str(reply_to),
-            "fail_if_not_exists": False
-        }
+        payload["message_reference"] = {"message_id": str(reply_to), "fail_if_not_exists": False}
     headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        await s.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers=headers,
-            data=json.dumps(payload)
-        )
+        await s.post(f"https://discord.com/api/v10/channels/{channel_id}/messages", headers=headers, data=json.dumps(payload))
 
 
 async def show_end_confirmation(uid: int, interaction: discord.Interaction):
@@ -292,25 +287,12 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
                 {
                     "type": 17,
                     "components": [
-                        {
-                            "type": 10,
-                            "content": "**Ты точно хочешь завершить диалог?**"
-                        },
+                        {"type": 10, "content": "**Ты точно хочешь завершить диалог?**"},
                         {
                             "type": 1,
                             "components": [
-                                {
-                                    "type": 2,
-                                    "style": 2,
-                                    "custom_id": f"confirm_end_{uid}",
-                                    "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}
-                                },
-                                {
-                                    "type": 2,
-                                    "style": 2,
-                                    "custom_id": f"cancel_end_{uid}",
-                                    "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}
-                                }
+                                {"type": 2, "style": 2, "custom_id": f"confirm_end_{uid}", "emoji": {"name": "checkmark", "id": "1504023759101886607", "animated": False}},
+                                {"type": 2, "style": 2, "custom_id": f"cancel_end_{uid}", "emoji": {"name": "cross", "id": "1504024178494410865", "animated": False}}
                             ]
                         }
                     ]
@@ -320,19 +302,12 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
     }
     headers = {"Authorization": f"Bot {TOKEN}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        await s.post(
-            f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback",
-            headers=headers,
-            data=json.dumps(payload)
-        )
+        await s.post(f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback", headers=headers, data=json.dumps(payload))
 
 
 async def end_dialog(uid: int, interaction: discord.Interaction):
     channel = interaction.channel
-    is_miko_thread = (
-        isinstance(channel, discord.Thread) and
-        channel.name.startswith("miko ·")
-    )
+    is_miko_thread = isinstance(channel, discord.Thread) and channel.name.startswith("miko ·")
     thread_id = user_thread.get(uid)
     in_memory = thread_id and interaction.channel_id == thread_id
 
@@ -436,7 +411,7 @@ async def miko(interaction: discord.Interaction):
         ephemeral=True
     )
 
-    greeting, image_url = await ai(
+    greeting, image_url, image_bytes = await ai(
         uid,
         f"Поприветствуй меня коротко, моё имя {display_name}.",
         username=display_name,
@@ -446,16 +421,15 @@ async def miko(interaction: discord.Interaction):
         thread.id, uid, greeting,
         display_name,
         interaction.user.display_avatar.url,
-        image_url=image_url
+        image_url=image_url,
+        image_bytes=image_bytes
     )
 
 
 @tree.command(name="setchannel", description="Добавить/убрать канал для miko (макс 3, admin)")
 async def setchannel(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
-            "<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True
-        )
+        await interaction.response.send_message("<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True)
         return
 
     guild_id = interaction.guild_id
@@ -470,34 +444,23 @@ async def setchannel(interaction: discord.Interaction):
         ch_list.remove(channel_id)
         if not ch_list:
             del allowed_channels[guild_id]
-            await interaction.response.send_message(
-                "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
-                ephemeral=True
-            )
+            await interaction.response.send_message("<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**", ephemeral=True)
         else:
             mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
-            await interaction.response.send_message(
-                f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}",
-                ephemeral=True
-            )
+            await interaction.response.send_message(f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}", ephemeral=True)
         return
 
     if len(ch_list) >= 3:
         mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
         await interaction.response.send_message(
-            f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\n"
-            f"Текущие: {', '.join(mentions)}\n"
-            f"Введи `/setchannel` в одном из них чтобы убрать.",
+            f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\nТекущие: {', '.join(mentions)}\nВведи `/setchannel` в одном из них чтобы убрать.",
             ephemeral=True
         )
         return
 
     ch_list.append(channel_id)
     mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
-    await interaction.response.send_message(
-        f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}",
-        ephemeral=True
-    )
+    await interaction.response.send_message(f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}", ephemeral=True)
 
 
 @client.event
@@ -524,7 +487,7 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         try:
-            reply, image_url = await ai(uid, message.content, username=display_name)
+            reply, image_url, image_bytes = await ai(uid, message.content, username=display_name)
         except Exception as e:
             await send_error_v2(message.channel.id, f"Ошибка: {e}", reply_to=message.id)
             return
@@ -535,7 +498,8 @@ async def on_message(message: discord.Message):
             display_name,
             message.author.display_avatar.url,
             reply_to=message.id,
-            image_url=image_url
+            image_url=image_url,
+            image_bytes=image_bytes
         )
     except Exception as e:
         print(f"Ошибка отправки: {e}")

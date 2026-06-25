@@ -85,9 +85,7 @@ TOOLS = [
 ]
 
 MODELS = [
-    "llama-3.3-70b-versatile",
-    "deepseek-r1-distill-llama-70b",
-    "llama-3.1-8b-instant",
+    "gen-lang-client-0145729174",
 ]
 
 

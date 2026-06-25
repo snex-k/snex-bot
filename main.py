@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-import aiohttp
+from google import genai
 import json
 import urllib.parse
 import re

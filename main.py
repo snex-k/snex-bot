@@ -1,15 +1,20 @@
 import discord
 from discord import app_commands
 from google import genai
+from google.genai import types
 import json
 import urllib.parse
 import re
 import os
 import datetime
 import unicodedata
+import asyncio
 
 TOKEN = os.environ.get("TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# --- Google Gemini Client ---
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -21,21 +26,22 @@ histories: dict[int, list[dict]] = {}
 user_thread: dict[int, int] = {}
 allowed_channels: dict[int, list[int]] = {}
 
+# --- System prompts ---
 SYSTEM_PROMPT_RU = (
-    "Тебя зовут Мико. Твой разработчик — Кими. "
-    "Ты просто собеседник. Общаешься естественно и неформально, как живой человек в Discord. "
-    "Отвечай коротко, понятно и по теме. Не пиши слишком длинные сообщения. "
-    "Не используй списки, заголовки и официальный стиль. "
-    "Общайся на 'ты'. Всегда отвечай только на русском языке. "
-    "Пиши легко, с эмоциями и вайбом обычного чата. "
-    "Если пользователь отправил картинку, гифку или видео — сначала отреагируй именно на них. "
-    "Не выдумывай детали, которых нет. "
-    "Не уходи в странные размышления или философию. "
-    "Имя пользователя используй только при первом приветствии. "
-    "В конце каждого сообщения добавляй эмодзи <a:kaito:1504034420720533538> "
-    "Всегда оборачивай ответ в **жирный текст**. "
-    "Если пользователь прямо просит сгенерировать изображение — используй generate_image. "
-    "Для generate_image всегда пиши prompt на английском языке."
+    "РўРµР±СЏ Р·РѕРІСѓС‚ РњРёРєРѕ. РўРІРѕР№ СЂР°Р·СЂР°Р±РѕС‚С‡РёРє вЂ” РљРёРјРё. "
+    "РўС‹ РїСЂРѕСЃС‚Рѕ СЃРѕР±РµСЃРµРґРЅРёРє. РћР±С‰Р°РµС€СЊСЃСЏ РµСЃС‚РµСЃС‚РІРµРЅРЅРѕ Рё РЅРµС„РѕСЂРјР°Р»СЊРЅРѕ, РєР°Рє Р¶РёРІРѕР№ С‡РµР»РѕРІРµРє РІ Discord. "
+    "РћС‚РІРµС‡Р°Р№ РєРѕСЂРѕС‚РєРѕ, РїРѕРЅСЏС‚РЅРѕ Рё РїРѕ С‚РµРјРµ. РќРµ РїРёС€Рё СЃР»РёС€РєРѕРј РґР»РёРЅРЅС‹Рµ СЃРѕРѕР±С‰РµРЅРёСЏ. "
+    "РќРµ РёСЃРїРѕР»СЊР·СѓР№ СЃРїРёСЃРєРё, Р·Р°РіРѕР»РѕРІРєРё Рё РѕС„РёС†РёР°Р»СЊРЅС‹Р№ СЃС‚РёР»СЊ. "
+    "РћР±С‰Р°Р№СЃСЏ РЅР° 'С‚С‹'. Р’СЃРµРіРґР° РѕС‚РІРµС‡Р°Р№ С‚РѕР»СЊРєРѕ РЅР° СЂСѓСЃСЃРєРѕРј СЏР·С‹РєРµ. "
+    "РџРёС€Рё Р»РµРіРєРѕ, СЃ СЌРјРѕС†РёСЏРјРё Рё РІР°Р№Р±РѕРј РѕР±С‹С‡РЅРѕРіРѕ С‡Р°С‚Р°. "
+    "Р•СЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РѕС‚РїСЂР°РІРёР» РєР°СЂС‚РёРЅРєСѓ, РіРёС„РєСѓ РёР»Рё РІРёРґРµРѕ вЂ” СЃРЅР°С‡Р°Р»Р° РѕС‚СЂРµР°РіРёСЂСѓР№ РёРјРµРЅРЅРѕ РЅР° РЅРёС…. "
+    "РќРµ РІС‹РґСѓРјС‹РІР°Р№ РґРµС‚Р°Р»Рё, РєРѕС‚РѕСЂС‹С… РЅРµС‚. "
+    "РќРµ СѓС…РѕРґРё РІ СЃС‚СЂР°РЅРЅС‹Рµ СЂР°Р·РјС‹С€Р»РµРЅРёСЏ РёР»Рё С„РёР»РѕСЃРѕС„РёСЋ. "
+    "РРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РёСЃРїРѕР»СЊР·СѓР№ С‚РѕР»СЊРєРѕ РїСЂРё РїРµСЂРІРѕРј РїСЂРёРІРµС‚СЃС‚РІРёРё. "
+    "Р’ РєРѕРЅС†Рµ РєР°Р¶РґРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ РґРѕР±Р°РІР»СЏР№ СЌРјРѕРґР·Рё  "
+    "Р’СЃРµРіРґР° РѕР±РѕСЂР°С‡РёРІР°Р№ РѕС‚РІРµС‚ РІ **Р¶РёСЂРЅС‹Р№ С‚РµРєСЃС‚**. "
+    "Р•СЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РїСЂСЏРјРѕ РїСЂРѕСЃРёС‚ СЃРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ РёР·РѕР±СЂР°Р¶РµРЅРёРµ вЂ” РёСЃРїРѕР»СЊР·СѓР№ generate_image. "
+    "Р”Р»СЏ generate_image РІСЃРµРіРґР° РїРёС€Рё prompt РЅР° Р°РЅРіР»РёР№СЃРєРѕРј СЏР·С‹РєРµ."
 )
 
 SYSTEM_PROMPT_EN = (
@@ -45,15 +51,17 @@ SYSTEM_PROMPT_EN = (
     "Don't use lists, titles, or an overly formal tone. "
     "Address the user casually. Always reply only in English. "
     "Write with emotion and the vibe of a normal chat. "
-    "If the user sends an image, gif, or video — react to it first. "
+    "If the user sends an image, gif, or video вЂ” react to it first. "
     "Don't make up details that aren't there. "
     "Don't drift into weird thoughts or philosophy. "
     "Use the user's name only on the first greeting. "
-    "Add the emoji <a:kaito:1504034420720533538> at the end of every message. "
+    "Add the emoji  at the end of every message. "
     "Always wrap your entire reply in **bold text**. "
-    "If the user clearly asks to generate an image — use generate_image. "
+    "If the user clearly asks to generate an image вЂ” use generate_image. "
     "For generate_image always write the prompt in English."
 )
+
+MODEL = "gen-lang-client-0145729174"
 
 
 def detect_language(text: str) -> str:
@@ -64,29 +72,23 @@ def detect_language(text: str) -> str:
     return "English"
 
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_image",
-            "description": "Generate an image. Always pass the prompt parameter with a detailed English description of what to draw.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Detailed description of the image in English. Required."
-                    }
-                },
-                "required": []
-            }
-        }
-    }
-]
-
-MODELS = [
-    "gen-lang-client-0145729174",
-]
+# --- Gemini Function Declaration for Image Generation ---
+generate_image_tool = types.Tool(function_declarations=[
+    types.FunctionDeclaration(
+        name="generate_image",
+        description="Generate an image. Always pass the prompt parameter with a detailed English description of what to draw.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "prompt": types.Schema(
+                    type=types.Type.STRING,
+                    description="Detailed description of the image in English. Required."
+                )
+            },
+            required=["prompt"]
+        )
+    )
+])
 
 
 async def execute_tool(tool_name: str, args: dict):
@@ -99,6 +101,7 @@ async def execute_tool(tool_name: str, args: dict):
             f"?width=1024&height=1024&nologo=true&seed={seed}&enhance=true"
         )
         try:
+            import aiohttp
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=45)) as s:
                 async with s.get(url) as r:
                     if r.status == 200:
@@ -107,92 +110,131 @@ async def execute_tool(tool_name: str, args: dict):
                         return f"IMAGE_BYTES:{url}", image_bytes
         except Exception as e:
             print(f"[IMG] Download failed: {e}")
-        return f"IMAGE:{url}", None
-    return "Неизвестное действие.", None
+            return f"IMAGE:{url}", None
+    return "РќРµРёР·РІРµСЃС‚РЅРѕРµ РґРµР№СЃС‚РІРёРµ.", None
 
 
-async def groq_request(messages, tools=None):
-    payload_base: dict = {"messages": messages, "max_tokens": 1024}
-    if tools:
-        payload_base["tools"] = tools
-        payload_base["tool_choice"] = "auto"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+async def gemini_request(system_prompt: str, history: list, use_tools: bool = True):
+    """Send a request to Gemini with conversation history."""
+    config_args = {
+        "system_instruction": system_prompt,
+        "max_output_tokens": 1024,
     }
-    last_error = "Неизвестная ошибка"
-    for model in MODELS:
-        try:
-            payload = {**payload_base, "model": model}
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
-                async with s.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers=headers,
-                    data=json.dumps(payload)
-                ) as r:
-                    status = r.status
-                    data = await r.json()
-            if status == 429:
-                print(f"[429] Лимит на {model}, следующая...")
-                continue
-            if "choices" not in data:
-                last_error = data.get("error", {}).get("message", str(data))
-                print(f"[ERR] {model}: {last_error}")
-                continue
-            print(f"[OK] Модель: {model}")
-            return data["choices"][0]["message"]
-        except Exception as e:
-            last_error = str(e)
-            print(f"[EXC] {model}: {e}")
-            continue
-    raise RuntimeError(f"Все модели недоступны. Ошибка: {last_error}")
+    if use_tools:
+        config_args["tools"] = [generate_image_tool]
+
+    config = types.GenerateContentConfig(**config_args)
+
+    # Convert history to Gemini Content format
+    contents = []
+    for msg in history:
+        role = "user" if msg["role"] == "user" else "model"
+        content = msg.get("content", "")
+        if content:
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part.from_text(text=content)]
+            ))
+
+    try:
+        response = await gemini_client.aio.models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=config,
+        )
+        return response
+    except Exception as e:
+        print(f"[Gemini Error] {e}")
+        raise
 
 
-async def ai(uid: int, text: str, username: str = "пользователь", force_lang: str = None):
+async def ai(uid: int, text: str, username: str = "РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ", force_lang: str = None):
     try:
         lang = force_lang or detect_language(text)
         histories[uid].append({"role": "user", "content": text})
 
         base_prompt = SYSTEM_PROMPT_RU if lang == "Russian" else SYSTEM_PROMPT_EN
-        name_label = "Имя пользователя" if lang == "Russian" else "User's name"
+        name_label = "РРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ" if lang == "Russian" else "User's name"
         system_with_user = base_prompt + f"\n{name_label}: {username}."
 
-        messages = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
-        msg = await groq_request(messages, tools=TOOLS)
+        # Slice last 30 messages for context
+        context = histories[uid][-30:]
+
+        # First call вЂ” with tools
+        response = await gemini_request(system_with_user, context, use_tools=True)
 
         image_url = None
         image_bytes = None
+        reply = None
 
-        if msg.get("tool_calls"):
-            histories[uid].append(msg)
-            for call in msg["tool_calls"]:
-                fn = call["function"]["name"]
-                args = json.loads(call["function"]["arguments"])
-                tool_result, img_data = await execute_tool(fn, args)
-                if tool_result.startswith("IMAGE"):
-                    image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
-                    image_bytes = img_data
-                    tool_result = "Картинка сгенерирована!"
-                histories[uid].append({
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": tool_result
-                })
-            messages2 = [{"role": "system", "content": system_with_user}] + histories[uid][-30:]
-            final = await groq_request(messages2)
-            reply = final.get("content") or "Готово!"
-        else:
-            reply = msg.get("content", "...")
-            reply = re.sub(r'<function=[^>]+>\{.*?\}</function>', '', reply, flags=re.DOTALL)
-            reply = re.sub(r'</?function[^>]*>', '', reply)
-            reply = re.sub(r'generate_image\s*=?\s*\{[^}]*\}', '', reply, flags=re.DOTALL)
-            reply = reply.strip() or "**...**"
+        # Check if model wants to call a function
+        if response.candidates:
+            candidate = response.candidates[0]
+            if candidate.content.parts:
+                first_part = candidate.content.parts[0]
+
+                if first_part.function_call:
+                    fn_call = first_part.function_call
+                    fn_name = fn_call.name
+                    fn_args = {}
+                    for k, v in fn_call.args.items():
+                        if isinstance(v, str):
+                            fn_args[k] = v
+                        else:
+                            fn_args[k] = str(v)
+
+                    print(f"[Gemini] Function call: {fn_name}({fn_args})")
+
+                    # Add model's function call message to history
+                    histories[uid].append({
+                        "role": "assistant",
+                        "content": None,
+                        "function_call": {"name": fn_name, "arguments": json.dumps(fn_args)}
+                    })
+
+                    # Execute the tool
+                    tool_result, img_data = await execute_tool(fn_name, fn_args)
+                    if tool_result.startswith("IMAGE"):
+                        image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
+                        image_bytes = img_data
+                        tool_result = "РљР°СЂС‚РёРЅРєР° СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅР°!"
+
+                    # Add tool result to history
+                    histories[uid].append({
+                        "role": "tool",
+                        "content": tool_result
+                    })
+
+                    # Second call вЂ” without tools to get final text
+                    context2 = histories[uid][-30:]
+                    response2 = await gemini_request(system_with_user, context2, use_tools=False)
+
+                    if response2.candidates and response2.candidates[0].content.parts:
+                        reply = response2.candidates[0].content.parts[0].text
+                    else:
+                        reply = "Р“РѕС‚РѕРІРѕ!"
+                else:
+                    # Normal text response
+                    reply = first_part.text
+            else:
+                reply = "..."
+
+        if not reply:
+            reply = "**...**"
+
+        # Clean up the reply
+        reply = re.sub(r'<\|[^>]+\|>', '', reply)
+        reply = re.sub(r'generate_image\s*[=:]\s*\{[^}]*\}', '', reply, flags=re.DOTALL)
+        reply = reply.strip() or "**...**"
+        if not reply.startswith("**") and not reply.endswith("**"):
+            reply = f"**{reply}**"
 
         histories[uid].append({"role": "assistant", "content": reply})
         return reply, image_url, image_bytes
+
     except Exception as e:
-        print(f"Ошибка в ai(): {e}")
-        return f"Ошибка: {e}", None, None
+        print(f"РћС€РёР±РєР° РІ ai(): {e}")
+        return f"РћС€РёР±РєР°: {e}", None, None
 
 
 async def send_v2(
@@ -205,6 +247,8 @@ async def send_v2(
     image_url: str = None,
     image_bytes: bytes = None
 ):
+    import aiohttp
+
     inner = [
         {
             "type": 9,
@@ -219,12 +263,12 @@ async def send_v2(
     if use_file:
         inner.append({
             "type": 12,
-            "items": [{"media": {"url": "attachment://image.jpg"}, "description": "Сгенерированное изображение"}]
+            "items": [{"media": {"url": "attachment://image.jpg"}, "description": "РЎРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ"}]
         })
     elif image_url:
         inner.append({
             "type": 12,
-            "items": [{"media": {"url": image_url}, "description": "Сгенерированное изображение"}]
+            "items": [{"media": {"url": image_url}, "description": "РЎРіРµРЅРµСЂРёСЂРѕРІР°РЅРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ"}]
         })
 
     inner.append({
@@ -270,13 +314,15 @@ async def send_v2(
                 data = await r.json()
                 status = r.status
 
-    if status not in (200, 201):
-        print(f"Discord ошибка: {data}")
-        raise RuntimeError(str(data))
-    return int(data["id"])
+        if status not in (200, 201):
+            print(f"Discord РѕС€РёР±РєР°: {data}")
+            raise RuntimeError(str(data))
+        return int(data["id"])
 
 
 async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
+    import aiohttp
+
     payload: dict = {
         "flags": 32768,
         "components": [
@@ -301,6 +347,8 @@ async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
 
 
 async def show_end_confirmation(uid: int, interaction: discord.Interaction):
+    import aiohttp
+
     payload = {
         "type": 4,
         "data": {
@@ -309,7 +357,7 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
                 {
                     "type": 17,
                     "components": [
-                        {"type": 10, "content": "**Ты точно хочешь завершить диалог?**"},
+                        {"type": 10, "content": "**РўС‹ С‚РѕС‡РЅРѕ С…РѕС‡РµС€СЊ Р·Р°РІРµСЂС€РёС‚СЊ РґРёР°Р»РѕРі?**"},
                         {
                             "type": 1,
                             "components": [
@@ -343,21 +391,21 @@ async def show_end_confirmation(uid: int, interaction: discord.Interaction):
 
 async def end_dialog(uid: int, interaction: discord.Interaction):
     channel = interaction.channel
-    is_miko_thread = isinstance(channel, discord.Thread) and channel.name.startswith("miko ·")
+    is_miko_thread = isinstance(channel, discord.Thread) and channel.name.startswith("miko В·")
     thread_id = user_thread.get(uid)
     in_memory = thread_id and interaction.channel_id == thread_id
 
     if not in_memory and not is_miko_thread:
-        await interaction.response.send_message("Диалог не найден.", ephemeral=True)
+        await interaction.response.send_message("Р”РёР°Р»РѕРі РЅРµ РЅР°Р№РґРµРЅ.", ephemeral=True)
         return
 
-    await interaction.response.send_message("**Чат завершён. Ветка удаляется...**")
+    await interaction.response.send_message("**Р§Р°С‚ Р·Р°РІРµСЂС€С‘РЅ. Р’РµС‚РєР° СѓРґР°Р»СЏРµС‚СЃСЏ...**")
     user_thread.pop(uid, None)
     histories.pop(uid, None)
     try:
         await channel.delete()
     except Exception as e:
-        print(f"Ошибка удаления ветки: {e}")
+        print(f"РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ РІРµС‚РєРё: {e}")
 
 
 def is_channel_allowed(guild_id: int, channel_id: int) -> bool:
@@ -378,7 +426,7 @@ async def on_interaction(interaction: discord.Interaction):
             except ValueError:
                 return
             if interaction.user.id != uid:
-                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
+                await interaction.response.send_message("Р­С‚Рѕ РЅРµ С‚РІРѕР№ РґРёР°Р»РѕРі!", ephemeral=True)
                 return
             await show_end_confirmation(uid, interaction)
 
@@ -388,15 +436,15 @@ async def on_interaction(interaction: discord.Interaction):
             except ValueError:
                 return
             if interaction.user.id != uid:
-                await interaction.response.send_message("Это не твой диалог!", ephemeral=True)
+                await interaction.response.send_message("Р­С‚Рѕ РЅРµ С‚РІРѕР№ РґРёР°Р»РѕРі!", ephemeral=True)
                 return
             await end_dialog(uid, interaction)
 
         elif custom_id.startswith("cancel_end_"):
-            await interaction.response.send_message("**Отменено.**", ephemeral=True)
+            await interaction.response.send_message("**РћС‚РјРµРЅРµРЅРѕ.**", ephemeral=True)
 
 
-@tree.command(name="miko", description="Чат с ai")
+@tree.command(name="miko", description="Р§Р°С‚ СЃ ai")
 async def miko(interaction: discord.Interaction):
     uid = interaction.user.id
     guild_id = interaction.guild_id
@@ -411,9 +459,9 @@ async def miko(interaction: discord.Interaction):
             ch = interaction.guild.get_channel(ch_id)
             if ch:
                 mentions.append(ch.mention)
-        mention_str = ", ".join(mentions) if mentions else "нужный канал"
+        mention_str = ", ".join(mentions) if mentions else "РЅСѓР¶РЅС‹Р№ РєР°РЅР°Р»"
         await interaction.followup.send(
-            f"<a:kaito:1504034420720533538> **Команду** `/miko` **можно использовать только в: {mention_str}**",
+            f" **РљРѕРјР°РЅРґСѓ** `/miko` **РјРѕР¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ С‚РѕР»СЊРєРѕ РІ: {mention_str}**",
             ephemeral=True
         )
         return
@@ -423,8 +471,8 @@ async def miko(interaction: discord.Interaction):
         existing_thread = interaction.guild.get_channel(existing_thread_id)
         if existing_thread:
             await interaction.followup.send(
-                f"<a:kaito:1504034420720533538> **У тебя уже есть активный чат: {existing_thread.mention}**\n"
-                f"Заверши его прежде чем начать новый.",
+                f" **РЈ С‚РµР±СЏ СѓР¶Рµ РµСЃС‚СЊ Р°РєС‚РёРІРЅС‹Р№ С‡Р°С‚: {existing_thread.mention}**\n"
+                f"Р—Р°РІРµСЂС€Рё РµРіРѕ РїСЂРµР¶РґРµ С‡РµРј РЅР°С‡Р°С‚СЊ РЅРѕРІС‹Р№.",
                 ephemeral=True
             )
             return
@@ -435,7 +483,7 @@ async def miko(interaction: discord.Interaction):
     histories[uid] = []
 
     thread = await interaction.channel.create_thread(
-        name=f"miko · {display_name}",
+        name=f"miko В· {display_name}",
         type=discord.ChannelType.private_thread,
         invitable=False,
     )
@@ -443,13 +491,13 @@ async def miko(interaction: discord.Interaction):
     user_thread[uid] = thread.id
 
     await interaction.followup.send(
-        f"<a:kaito:1504034420720533538> **Твой чат: {thread.mention}**",
+        f" **РўРІРѕР№ С‡Р°С‚: {thread.mention}**",
         ephemeral=True
     )
 
     greeting, image_url, image_bytes = await ai(
         uid,
-        f"Поприветствуй меня коротко, моё имя {display_name}.",
+        f"РџРѕРїСЂРёРІРµС‚СЃС‚РІСѓР№ РјРµРЅСЏ РєРѕСЂРѕС‚РєРѕ, РјРѕС‘ РёРјСЏ {display_name}.",
         username=display_name,
         force_lang="Russian"
     )
@@ -462,11 +510,11 @@ async def miko(interaction: discord.Interaction):
     )
 
 
-@tree.command(name="setchannel", description="Добавить/убрать канал для miko (макс 3, admin)")
+@tree.command(name="setchannel", description="Р”РѕР±Р°РІРёС‚СЊ/СѓР±СЂР°С‚СЊ РєР°РЅР°Р» РґР»СЏ miko (РјР°РєСЃ 3, admin)")
 async def setchannel(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
-            "<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True
+            "<:cross:1504024178494410865> **РЈ С‚РµР±СЏ РЅРµС‚ РїСЂР°РІ.**", ephemeral=True
         )
         return
 
@@ -483,13 +531,13 @@ async def setchannel(interaction: discord.Interaction):
         if not ch_list:
             del allowed_channels[guild_id]
             await interaction.response.send_message(
-                "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
+                "<:checkmark:1504023759101886607> **РљР°РЅР°Р» СѓР±СЂР°РЅ. РўРµРїРµСЂСЊ** `/miko` **СЂР°Р±РѕС‚Р°РµС‚ РІРµР·РґРµ.**",
                 ephemeral=True
             )
         else:
             mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
             await interaction.response.send_message(
-                f"<:checkmark:1504023759101886607> **Канал убран.**\nАктивные каналы: {', '.join(mentions)}",
+                f"<:checkmark:1504023759101886607> **РљР°РЅР°Р» СѓР±СЂР°РЅ.**\nРђРєС‚РёРІРЅС‹Рµ РєР°РЅР°Р»С‹: {', '.join(mentions)}",
                 ephemeral=True
             )
         return
@@ -497,9 +545,9 @@ async def setchannel(interaction: discord.Interaction):
     if len(ch_list) >= 3:
         mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
         await interaction.response.send_message(
-            f"<:cross:1504024178494410865> **Достигнут лимит (3 канала).**\n"
-            f"Текущие: {', '.join(mentions)}\n"
-            f"Введи `/setchannel` в одном из них чтобы убрать.",
+            f"<:cross:1504024178494410865> **Р”РѕСЃС‚РёРіРЅСѓС‚ Р»РёРјРёС‚ (3 РєР°РЅР°Р»Р°).**\n"
+            f"РўРµРєСѓС‰РёРµ: {', '.join(mentions)}\n"
+            f"Р’РІРµРґРё `/setchannel` РІ РѕРґРЅРѕРј РёР· РЅРёС… С‡С‚РѕР±С‹ СѓР±СЂР°С‚СЊ.",
             ephemeral=True
         )
         return
@@ -507,7 +555,7 @@ async def setchannel(interaction: discord.Interaction):
     ch_list.append(channel_id)
     mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
     await interaction.response.send_message(
-        f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}",
+        f"<:checkmark:1504023759101886607> **РљР°РЅР°Р» РґРѕР±Р°РІР»РµРЅ!**\nРђРєС‚РёРІРЅС‹Рµ РєР°РЅР°Р»С‹: {', '.join(mentions)}",
         ephemeral=True
     )
 
@@ -522,7 +570,7 @@ async def on_message(message: discord.Message):
     if not thread_id or message.channel.id != thread_id:
         if (
             isinstance(channel, discord.Thread) and
-            channel.name == f"miko · {message.author.display_name}"
+            channel.name == f"miko В· {message.author.display_name}"
         ):
             user_thread[uid] = channel.id
             if uid not in histories:
@@ -534,25 +582,27 @@ async def on_message(message: discord.Message):
         try:
             reply, image_url, image_bytes = await ai(uid, message.content, username=display_name)
         except Exception as e:
-            await send_error_v2(message.channel.id, f"Ошибка: {e}", reply_to=message.id)
+            await send_error_v2(message.channel.id, f"РћС€РёР±РєР°: {e}", reply_to=message.id)
             return
-    try:
-        await send_v2(
-            message.channel.id, uid, reply,
-            display_name,
-            message.author.display_avatar.url,
-            reply_to=message.id,
-            image_url=image_url,
-            image_bytes=image_bytes
-        )
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
+        try:
+            await send_v2(
+                message.channel.id, uid, reply,
+                display_name,
+                message.author.display_avatar.url,
+                reply_to=message.id,
+                image_url=image_url,
+                image_bytes=image_bytes
+            )
+        except Exception as e:
+            print(f"РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё: {e}")
+
+
 @client.event
 async def on_ready():
     await client.change_presence(status=discord.Status.idle)
     for guild in client.guilds:
         await tree.sync(guild=guild)
     await tree.sync()
-    print(f"Запущен: {client.user}")
-    
-client.run(TOKEN)
+    print(f"Р—Р°РїСѓС‰РµРЅ: {client.user}")
+
+bot.run(TOKEN)

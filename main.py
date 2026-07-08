@@ -605,4 +605,4 @@ async def on_ready():
     await tree.sync()
     print(f"Р—Р°РїСѓС‰РµРЅ: {client.user}")
 
-bot.run(TOKEN)
+client.run(TOKEN)

@@ -61,7 +61,7 @@ SYSTEM_PROMPT_EN = (
     "For generate_image always write the prompt in English."
 )
 
-MODEL = "gen-lang-client-0145729174"
+MODEL = "gemini-2.0-flash"
 
 
 def detect_language(text: str) -> str:

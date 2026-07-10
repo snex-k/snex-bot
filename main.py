@@ -627,6 +627,76 @@ def build_server_context(guild_id: int = None, channel_id: int = None, lang: str
     )
 
 
+def get_resolved_reference(message: discord.Message):
+    """Return cached referenced message if Discord.py already resolved it."""
+    ref = getattr(message, "reference", None)
+    if not ref:
+        return None
+
+    resolved = getattr(ref, "resolved", None)
+    if isinstance(resolved, discord.Message):
+        return resolved
+
+    cached = getattr(ref, "cached_message", None)
+    if isinstance(cached, discord.Message):
+        return cached
+
+    return None
+
+
+def is_reply_to_me(message: discord.Message) -> bool:
+    referenced = get_resolved_reference(message)
+    return bool(client.user and referenced and referenced.author.id == client.user.id)
+
+
+async def fetch_referenced_message(message: discord.Message):
+    """Fetch referenced message if it is not cached/resolved."""
+    referenced = get_resolved_reference(message)
+    if referenced:
+        return referenced
+
+    ref = getattr(message, "reference", None)
+    if not ref or not getattr(ref, "message_id", None):
+        return None
+
+    try:
+        channel = message.guild.get_channel(ref.channel_id) if message.guild and ref.channel_id else message.channel
+        if channel is None:
+            channel = await client.fetch_channel(ref.channel_id)
+        return await channel.fetch_message(ref.message_id)
+    except Exception as e:
+        print(f"[Reference] Fetch failed: {e}")
+        return None
+
+
+async def build_reply_context(message: discord.Message, lang: str) -> str:
+    referenced = await fetch_referenced_message(message)
+    if not referenced:
+        return ""
+
+    ref_text = (referenced.content or "").strip()
+    if not ref_text and referenced.attachments:
+        ref_text = "[вложение]" if lang == "Russian" else "[attachment]"
+    if not ref_text:
+        ref_text = "[пустое сообщение]" if lang == "Russian" else "[empty message]"
+
+    ref_text = re.sub(r"\s+", " ", strip_emojis(ref_text))[:1000]
+    author_name = getattr(referenced.author, "display_name", referenced.author.name)
+
+    if lang == "Russian":
+        return (
+            "\nТекущий пользователь отвечает именно на это сообщение:\n"
+            f"{author_name}: {ref_text}\n"
+            "Учитывай это как главный контекст текущего ответа."
+        )
+
+    return (
+        "\nThe current user is replying specifically to this message:\n"
+        f"{author_name}: {ref_text}\n"
+        "Use this as the main context for the current reply."
+    )
+
+
 def should_reply_in_public_chat(message: discord.Message) -> bool:
     if not RANDOM_CHAT_ENABLED or not message.guild:
         return False
@@ -644,8 +714,9 @@ def should_reply_in_public_chat(message: discord.Message) -> bool:
 
     mentioned = bool(client.user and client.user in message.mentions)
     called_by_name = bool(re.search(r"(?i)(^|\s)(miko|мико)(\s|$|[,!.?])", text))
+    replied_to_me = is_reply_to_me(message)
 
-    if REPLY_ON_MENTION and (mentioned or called_by_name):
+    if REPLY_ON_MENTION and (mentioned or called_by_name or replied_to_me):
         return True
 
     if text.startswith(("/", "!", ".")):
@@ -671,6 +742,8 @@ async def reply_in_public_chat(message: discord.Message) -> bool:
         return False
 
     clean_text = re.sub(fr"<@!?{client.user.id}>", "Мико", message.content or "") if client.user else (message.content or "")
+    lang = detect_language(clean_text)
+    reply_context = await build_reply_context(message, lang)
 
     async with message.channel.typing():
         reply, _, _ = await ai(
@@ -678,7 +751,8 @@ async def reply_in_public_chat(message: discord.Message) -> bool:
             clean_text,
             username=message.author.display_name,
             guild_id=message.guild.id if message.guild else None,
-            channel_id=message.channel.id
+            channel_id=message.channel.id,
+            current_context=reply_context
         )
         reply = strip_emojis(reply)
 
@@ -706,7 +780,7 @@ def quick_reply_for_low_signal(text: str, lang: str) -> str | None:
     if normalized in insults:
         return "Без негатива, давай нормально" if lang == "Russian" else "No negativity, let's talk normally"
 
-    if normalized in unclear or len(normalized) <= 2:
+    if normalized in unclear:
         return "Не поняла, поясни чуть-чуть" if lang == "Russian" else "Didn't get that, explain a bit"
 
     return None
@@ -718,7 +792,8 @@ async def ai(
     username: str = "пользователь",
     force_lang: str = None,
     guild_id: int = None,
-    channel_id: int = None
+    channel_id: int = None,
+    current_context: str = ""
 ):
     try:
         lang = force_lang or detect_language(text)
@@ -744,6 +819,7 @@ async def ai(
             + f"\n{name_label}: {username}. {no_name_rule} {no_emoji_rule}"
             + build_memory_context(uid, lang)
             + build_server_context(guild_id, channel_id, lang)
+            + (current_context or "")
         )
 
         image_url = None

@@ -126,16 +126,33 @@
     }
 
     .logo {
-      width: 46px;
-      height: 46px;
-      border-radius: 15px;
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      position: relative;
       display: grid;
       place-items: center;
-      font-weight: 950;
-      letter-spacing: -.05em;
-      background: linear-gradient(145deg, #1f2937, #111827 45%, #3b0764);
-      border: 1px solid rgba(255,255,255,.12);
-      box-shadow: 0 0 42px rgba(139,92,246,.24), inset 0 1px 0 rgba(255,255,255,.12);
+      overflow: hidden;
+      background: #050711;
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 0 42px rgba(139,92,246,.24), 0 0 22px rgba(34,211,238,.08), inset 0 1px 0 rgba(255,255,255,.12);
+    }
+
+    .logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      filter: saturate(.92) contrast(1.08);
+    }
+
+    .logo::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background: linear-gradient(135deg, rgba(255,255,255,.22), transparent 42%, rgba(139,92,246,.16));
     }
 
     .brand-title b {
@@ -379,6 +396,118 @@
     .hint { color: #64748b; font-size: 12px; margin-top: 9px; }
     .wide { grid-column: span 2; }
 
+    .info {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .info-card {
+      position: relative;
+      overflow: hidden;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.014)),
+        rgba(3, 5, 12, .92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 18px 55px rgba(0,0,0,.30);
+      padding: 22px;
+      animation: cardIn .8s cubic-bezier(.2,.8,.2,1) .38s both;
+    }
+
+    .info-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at top right, rgba(34,211,238,.08), transparent 16rem);
+    }
+
+    .info-title, .info-text, .feature-list, .endpoint-list, .stack {
+      position: relative;
+      z-index: 1;
+    }
+
+    .info-title {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: -.035em;
+    }
+
+    .info-text {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .feature {
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 16px;
+      background: rgba(255,255,255,.025);
+      padding: 12px 13px;
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .feature b {
+      display: block;
+      color: var(--text);
+      margin-bottom: 3px;
+      font-size: 13px;
+    }
+
+    .endpoint-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .endpoint {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 15px;
+      background: rgba(255,255,255,.024);
+      padding: 11px 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .endpoint code {
+      color: #dbeafe;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-weight: 800;
+    }
+
+    .stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .stack span {
+      border: 1px solid rgba(139,92,246,.22);
+      background: rgba(139,92,246,.08);
+      color: #ddd6fe;
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
     .footer {
       margin-top: 16px;
       border-radius: 22px;
@@ -409,6 +538,7 @@
     @media (max-width: 900px) {
       .hero-inner { grid-template-columns: 1fr; }
       .grid { grid-template-columns: repeat(2, 1fr); }
+      .info { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 560px) {
@@ -418,6 +548,7 @@
       .hero-inner { padding: 24px; }
       .grid { grid-template-columns: 1fr; }
       .wide { grid-column: span 1; }
+      .feature-list { grid-template-columns: 1fr; }
       h1 { font-size: clamp(42px, 15vw, 62px); }
     }
   </style>
@@ -433,7 +564,7 @@
   <main class="shell">
     <nav class="nav">
       <div class="brand">
-        <div class="logo">M</div>
+        <div class="logo"><img src="https://files.catbox.moe/8hwobi.jpg" alt="Miko avatar"></div>
         <div class="brand-title">
           <b>Miko Status</b>
           <span>Discord AI bot dashboard</span>
@@ -510,6 +641,39 @@
       </div>
     </section>
 
+    <section class="info">
+      <article class="info-card">
+        <h2 class="info-title">Текущая конфигурация</h2>
+        <p class="info-text">
+          Короткая сводка того, с чем сейчас запущен сервис. Тут только безопасные публичные параметры,
+          без токенов, ключей и приватной памяти.
+        </p>
+        <div class="feature-list">
+          <div class="feature"><b>AI модель</b><span id="configModel">{{MODEL}}</span></div>
+          <div class="feature"><b>Хранилище памяти</b><span id="configDb">{{DB_BACKEND}}</span></div>
+          <div class="feature"><b>Рандом-ответы</b><span id="configRandom">{{RANDOM_CHANCE}}</span></div>
+          <div class="feature"><b>Health check</b><span>/healthz</span></div>
+        </div>
+      </article>
+
+      <aside class="info-card">
+        <h2 class="info-title">Сервис</h2>
+        <p class="info-text">Полезные endpoint'ы и текущий стек проекта.</p>
+        <div class="endpoint-list">
+          <div class="endpoint"><span>Health check</span><code>/healthz</code></div>
+          <div class="endpoint"><span>JSON status</span><code>/status.json</code></div>
+          <div class="endpoint"><span>Главная</span><code>/</code></div>
+        </div>
+        <div class="stack">
+          <span>Discord.py</span>
+          <span>Mistral AI</span>
+          <span>Render</span>
+          <span>MongoDB/Supabase</span>
+        </div>
+      </aside>
+    </section>
+
+
     <div class="footer">
       <div>Автообновление каждые 15 секунд. Последнее обновление: <span id="updated">при загрузке</span></div>
       <div class="footer-links">
@@ -549,9 +713,13 @@
       setText('users', data.users ?? '—');
       setText('uptime', formatUptime(data.uptime_seconds));
       setText('latency', data.latency_ms ? Math.round(data.latency_ms) + ' мс' : '—');
+      const randomText = data.random_chat_enabled ? ((data.random_reply_chance || 0) * 100).toFixed(1) + '%' : 'выключено';
       setText('model', data.model || '—');
       setText('db', data.db_backend || '—');
-      setText('random', data.random_chat_enabled ? ((data.random_reply_chance || 0) * 100).toFixed(1) + '%' : 'выключено');
+      setText('random', randomText);
+      setText('configModel', data.model || '—');
+      setText('configDb', data.db_backend || '—');
+      setText('configRandom', randomText);
       setText('updated', new Date().toLocaleTimeString('ru-RU'));
     }
 
@@ -582,5 +750,5 @@
     refreshStatus();
     setInterval(refreshStatus, 15000);
   </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1928da0b94611d5',t:'MTc4MzcxNzgwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a192a9371b41c2e8',t:'MTc4MzcxODkzNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>

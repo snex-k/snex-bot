@@ -64,7 +64,6 @@ SYSTEM_PROMPT_RU = (
     "Если сообщение слишком короткое или непонятное — просто попроси пояснить коротко. "
     "Используй блок памяти, если он есть, но не повторяй его без причины. "
     "Имя пользователя НЕ пиши в обычных ответах. Используй имя только в первом приветствии или если пользователь прямо спрашивает про имя. "
-    "Не добавляй в сообщение эмодзи"
     "Всегда оборачивай ответ в **жирный текст**. "
     "Если пользователь прямо просит сгенерировать изображение — используй generate_image. "
     "Для generate_image всегда пиши prompt на английском языке."
@@ -476,33 +475,17 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = T
     messages = [{"role": "system", "content": system_prompt}]
 
     # Convert internal history to Mistral/OpenAI-compatible message format.
-    # Tool messages are included only if their matching assistant tool_call is also in context.
-    pending_tool_ids = set()
+    # ВАЖНО: старые tool/tool_calls из памяти пропускаем.
+    # Mistral строго требует порядок assistant(tool_calls) -> tool,
+    # а после обрезки истории этот порядок может ломаться и давать ошибку 400.
+    # Генерация картинок теперь обрабатывается напрямую до запроса к Mistral,
+    # поэтому tool-сообщения в контексте больше не нужны.
     for msg in history:
         role = msg.get("role")
         content = msg.get("content")
 
-        if role in ("user", "assistant"):
-            if role == "assistant" and msg.get("tool_calls"):
-                tool_calls = msg["tool_calls"]
-                messages.append({
-                    "role": "assistant",
-                    "content": content or "",
-                    "tool_calls": tool_calls
-                })
-                for tool_call in tool_calls:
-                    if tool_call.get("id"):
-                        pending_tool_ids.add(tool_call["id"])
-            elif content:
-                messages.append({"role": role, "content": content})
-
-        elif role == "tool" and msg.get("tool_call_id") in pending_tool_ids:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": msg["tool_call_id"],
-                "content": content or ""
-            })
-            pending_tool_ids.discard(msg["tool_call_id"])
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
 
     payload = {
         "model": MISTRAL_MODEL,
@@ -687,8 +670,8 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
         # Slice recent messages for context; older context is stored in conversation_summaries.
         context = histories[uid][-MAX_RECENT_MESSAGES:]
 
-        # First call — with tools
-        response = await mistral_request(system_with_user, context, use_tools=True)
+        # Main chat call. Tools are disabled here because image generation is handled directly above.
+        response = await mistral_request(system_with_user, context, use_tools=False)
 
         # Check if model wants to call a function
         tool_calls = response.get("tool_calls") or []

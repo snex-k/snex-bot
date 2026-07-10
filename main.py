@@ -43,7 +43,10 @@ MISTRAL_REQUEST_COOLDOWN = env_float("MISTRAL_REQUEST_COOLDOWN", 1.5)
 MISTRAL_MAX_RETRIES = env_int("MISTRAL_MAX_RETRIES", 2)
 MISTRAL_RATE_LIMIT_FALLBACK_SECONDS = env_int("MISTRAL_RATE_LIMIT_FALLBACK_SECONDS", 30)
 PORT = env_int("PORT", 0)
-HEALTH_SERVER_ENABLED = env_bool("HEALTH_SERVER_ENABLED", True)
+# Render Web Service needs a listening HTTP port. Health server is ON whenever PORT exists.
+# To disable it manually, set DISABLE_HEALTH_SERVER=true.
+HEALTH_SERVER_ENABLED = env_bool("HEALTH_SERVER_ENABLED", True)  # kept for backward compatibility
+DISABLE_HEALTH_SERVER = env_bool("DISABLE_HEALTH_SERVER", False)
 MEMORY_FILE = Path(os.environ.get("MEMORY_FILE", "data/miko_memory.json"))
 DB_BACKEND = os.environ.get("DB_BACKEND", "auto").lower()  # auto/json/mongodb/supabase
 
@@ -1385,8 +1388,8 @@ async def start_health_server():
     """
     global health_runner
 
-    if not HEALTH_SERVER_ENABLED:
-        print("[Health] Disabled", flush=True)
+    if DISABLE_HEALTH_SERVER:
+        print("[Health] Disabled by DISABLE_HEALTH_SERVER", flush=True)
         return
     if not PORT:
         print("[Health] PORT is not set; health server not started", flush=True)

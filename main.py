@@ -1,7 +1,6 @@
 import discord
 from discord import app_commands
-from google import genai
-from google.genai import types
+import aiohttp
 import json
 import urllib.parse
 import re
@@ -11,10 +10,9 @@ import unicodedata
 import asyncio
 
 TOKEN = os.environ.get("TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# --- Google Gemini Client ---
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-latest")
+MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -61,7 +59,8 @@ SYSTEM_PROMPT_EN = (
     "For generate_image always write the prompt in English."
 )
 
-MODEL = "gemini-2.5-pro"
+# Модель можно поменять через переменную окружения MISTRAL_MODEL.
+# Например: mistral-large-latest, ministral-8b-latest, open-mistral-nemo.
 
 
 def detect_language(text: str) -> str:
@@ -72,23 +71,24 @@ def detect_language(text: str) -> str:
     return "English"
 
 
-# --- Gemini Function Declaration for Image Generation ---
-generate_image_tool = types.Tool(function_declarations=[
-    types.FunctionDeclaration(
-        name="generate_image",
-        description="Generate an image. Always pass the prompt parameter with a detailed English description of what to draw.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "prompt": types.Schema(
-                    type=types.Type.STRING,
-                    description="Detailed description of the image in English. Required."
-                )
+# --- Mistral Function Declaration for Image Generation ---
+generate_image_tool = {
+    "type": "function",
+    "function": {
+        "name": "generate_image",
+        "description": "Generate an image. Always pass the prompt parameter with a detailed English description of what to draw.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed description of the image in English. Required."
+                }
             },
-            required=["prompt"]
-        )
-    )
-])
+            "required": ["prompt"]
+        }
+    }
+}
 
 
 async def execute_tool(tool_name: str, args: dict):
@@ -114,38 +114,66 @@ async def execute_tool(tool_name: str, args: dict):
     return "Неизвестное действие.", None
 
 
-async def gemini_request(system_prompt: str, history: list, use_tools: bool = True):
-    """Send a request to Gemini with conversation history."""
-    config_args = {
-        "system_instruction": system_prompt,
-        "max_output_tokens": 1024,
+async def mistral_request(system_prompt: str, history: list, use_tools: bool = True):
+    """Send a chat completion request to Mistral AI with conversation history."""
+    if not MISTRAL_API_KEY:
+        raise RuntimeError("Не задан MISTRAL_API_KEY в переменных окружения.")
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Convert internal history to Mistral/OpenAI-compatible message format.
+    for msg in history:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        if role in ("user", "assistant"):
+            if role == "assistant" and msg.get("tool_calls"):
+                messages.append({
+                    "role": "assistant",
+                    "content": content or "",
+                    "tool_calls": msg["tool_calls"]
+                })
+            elif content:
+                messages.append({"role": role, "content": content})
+
+        elif role == "tool" and msg.get("tool_call_id"):
+            messages.append({
+                "role": "tool",
+                "tool_call_id": msg["tool_call_id"],
+                "content": content or ""
+            })
+
+    payload = {
+        "model": MISTRAL_MODEL,
+        "messages": messages,
+        "max_tokens": 1024,
+        "temperature": 0.8,
     }
     if use_tools:
-        config_args["tools"] = [generate_image_tool]
+        payload["tools"] = [generate_image_tool]
+        payload["tool_choice"] = "auto"
 
-    config = types.GenerateContentConfig(**config_args)
-
-    # Convert history to Gemini Content format
-    contents = []
-    for msg in history:
-        role = "user" if msg["role"] == "user" else "model"
-        content = msg.get("content", "")
-        if content:
-            contents.append(types.Content(
-                role=role,
-                parts=[types.Part.from_text(text=content)]
-            ))
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
     try:
-        response = await gemini_client.aio.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=config,
-        )
-        return response
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+            async with s.post(MISTRAL_API_URL, headers=headers, json=payload) as r:
+                raw = await r.text()
+                if r.status not in (200, 201):
+                    raise RuntimeError(f"Mistral API error {r.status}: {raw}")
+                data = json.loads(raw)
     except Exception as e:
-        print(f"[Gemini Error] {e}")
+        print(f"[Mistral Error] {e}")
         raise
+
+    choices = data.get("choices") or []
+    if not choices:
+        return {"role": "assistant", "content": "..."}
+    return choices[0].get("message") or {"role": "assistant", "content": "..."}
 
 
 async def ai(uid: int, text: str, username: str = "пользователь", force_lang: str = None):
@@ -161,63 +189,78 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
         context = histories[uid][-30:]
 
         # First call — with tools
-        response = await gemini_request(system_with_user, context, use_tools=True)
+        response = await mistral_request(system_with_user, context, use_tools=True)
 
         image_url = None
         image_bytes = None
         reply = None
 
         # Check if model wants to call a function
-        if response.candidates:
-            candidate = response.candidates[0]
-            if candidate.content.parts:
-                first_part = candidate.content.parts[0]
+        tool_calls = response.get("tool_calls") or []
+        if tool_calls:
+            # The bot has only one tool, but this supports multiple tool calls if Mistral returns them.
+            normalized_tool_calls = []
 
-                if first_part.function_call:
-                    fn_call = first_part.function_call
-                    fn_name = fn_call.name
-                    fn_args = {}
-                    for k, v in fn_call.args.items():
-                        if isinstance(v, str):
-                            fn_args[k] = v
-                        else:
-                            fn_args[k] = str(v)
+            for i, tool_call in enumerate(tool_calls):
+                function_data = tool_call.get("function") or {}
+                fn_name = function_data.get("name", "")
+                raw_args = function_data.get("arguments") or {}
 
-                    print(f"[Gemini] Function call: {fn_name}({fn_args})")
-
-                    # Add model's function call message to history
-                    histories[uid].append({
-                        "role": "assistant",
-                        "content": None,
-                        "function_call": {"name": fn_name, "arguments": json.dumps(fn_args)}
-                    })
-
-                    # Execute the tool
-                    tool_result, img_data = await execute_tool(fn_name, fn_args)
-                    if tool_result.startswith("IMAGE"):
-                        image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
-                        image_bytes = img_data
-                        tool_result = "Картинка сгенерирована!"
-
-                    # Add tool result to history
-                    histories[uid].append({
-                        "role": "tool",
-                        "content": tool_result
-                    })
-
-                    # Second call — without tools to get final text
-                    context2 = histories[uid][-30:]
-                    response2 = await gemini_request(system_with_user, context2, use_tools=False)
-
-                    if response2.candidates and response2.candidates[0].content.parts:
-                        reply = response2.candidates[0].content.parts[0].text
-                    else:
-                        reply = "Готово!"
+                if isinstance(raw_args, str):
+                    try:
+                        fn_args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        fn_args = {"prompt": raw_args}
+                elif isinstance(raw_args, dict):
+                    fn_args = raw_args
                 else:
-                    # Normal text response
-                    reply = first_part.text
-            else:
-                reply = "..."
+                    fn_args = {}
+
+                # Mistral expects tool_call_id in the following tool message.
+                tool_call_id = tool_call.get("id") or f"call_{uid}_{len(histories[uid])}_{i}"
+                normalized_tool_calls.append({
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "arguments": json.dumps(fn_args, ensure_ascii=False)
+                    }
+                })
+
+                print(f"[Mistral] Function call: {fn_name}({fn_args})")
+
+            # Add model's function call message to history
+            histories[uid].append({
+                "role": "assistant",
+                "content": response.get("content") or "",
+                "tool_calls": normalized_tool_calls
+            })
+
+            for tool_call in normalized_tool_calls:
+                fn_name = tool_call["function"]["name"]
+                fn_args = json.loads(tool_call["function"]["arguments"] or "{}")
+
+                # Execute the tool
+                tool_result, img_data = await execute_tool(fn_name, fn_args)
+                if tool_result.startswith("IMAGE"):
+                    image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
+                    image_bytes = img_data
+                    tool_result = "Картинка сгенерирована!"
+
+                # Add tool result to history
+                histories[uid].append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": tool_result
+                })
+
+            # Second call — without tools to get final text
+            context2 = histories[uid][-30:]
+            response2 = await mistral_request(system_with_user, context2, use_tools=False)
+            reply = response2.get("content") or "Готово!"
+        else:
+            # Normal text response
+            reply = response.get("content") or "..."
 
         if not reply:
             reply = "**...**"
@@ -226,8 +269,8 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
         reply = re.sub(r'<\|[^>]+\|>', '', reply)
         reply = re.sub(r'generate_image\s*[=:]\s*\{[^}]*\}', '', reply, flags=re.DOTALL)
         reply = reply.strip() or "**...**"
-        if not reply.startswith("**") and not reply.endswith("**"):
-            reply = f"**{reply}**"
+        if not reply.startswith("**") or not reply.endswith("**"):
+            reply = f"**{reply.strip('*')}**"
 
         histories[uid].append({"role": "assistant", "content": reply})
         return reply, image_url, image_bytes

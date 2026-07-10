@@ -295,7 +295,7 @@ async def send_v2(
     inner = [
         {
             "type": 9,
-            "components": [{"type": 10, "content": f"# **{username}**"}],
+            "components": [{"type": 10, "content": f"# **{username}** <:mistral_ai:1524942153128874044>"}],
             "accessory": {"type": 11, "media": {"url": avatar_url}},
         },
         {"type": 14, "divider": True, "spacing": 1},

@@ -38,6 +38,9 @@ TOKEN = os.environ.get("TOKEN")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-latest")
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
+MISTRAL_REQUEST_COOLDOWN = env_float("MISTRAL_REQUEST_COOLDOWN", 1.5)
+MISTRAL_MAX_RETRIES = env_int("MISTRAL_MAX_RETRIES", 2)
+MISTRAL_RATE_LIMIT_FALLBACK_SECONDS = env_int("MISTRAL_RATE_LIMIT_FALLBACK_SECONDS", 30)
 MEMORY_FILE = Path(os.environ.get("MEMORY_FILE", "data/miko_memory.json"))
 DB_BACKEND = os.environ.get("DB_BACKEND", "auto").lower()  # auto/json/mongodb/supabase
 
@@ -65,7 +68,7 @@ MAX_SERVER_MESSAGES = env_int("MAX_SERVER_MESSAGES", 200)
 SERVER_CONTEXT_SAVE_INTERVAL = env_int("SERVER_CONTEXT_SAVE_INTERVAL", 60)
 RANDOM_CHAT_ENABLED = env_bool("RANDOM_CHAT_ENABLED", True)
 REPLY_ON_MENTION = env_bool("REPLY_ON_MENTION", True)
-RANDOM_REPLY_CHANCE = env_float("RANDOM_REPLY_CHANCE", 0.03)  # 0.03 = 3% шанс
+RANDOM_REPLY_CHANCE = env_float("RANDOM_REPLY_CHANCE", 0.01)  # 0.01 = 1% шанс
 RANDOM_REPLY_COOLDOWN = env_int("RANDOM_REPLY_COOLDOWN", 240)  # секунд на канал
 
 intents = discord.Intents.default()
@@ -82,6 +85,9 @@ conversation_summaries: dict[int, str] = {}
 guild_recent_messages: dict[int, list[dict]] = {}
 random_reply_last: dict[int, float] = {}
 last_server_context_save = 0.0
+mistral_request_lock = asyncio.Lock()
+mistral_last_request = 0.0
+mistral_rate_limited_until = 0.0
 
 # --- System prompts ---
 SYSTEM_PROMPT_RU = (
@@ -447,6 +453,12 @@ def strip_emojis(text: str) -> str:
     return text.strip()
 
 
+class MistralRateLimitError(RuntimeError):
+    def __init__(self, retry_after: int = 0):
+        self.retry_after = max(0, int(retry_after or 0))
+        super().__init__(f"Mistral rate limit. Retry after {self.retry_after} seconds")
+
+
 async def mistral_request(system_prompt: str, history: list, use_tools: bool = False):
     """Send a chat completion request to Mistral AI with conversation history."""
     if not MISTRAL_API_KEY:
@@ -478,16 +490,55 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = F
         "Accept": "application/json",
     }
 
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
-            async with s.post(MISTRAL_API_URL, headers=headers, json=payload) as r:
-                raw = await r.text()
-                if r.status not in (200, 201):
-                    raise RuntimeError(f"Mistral API error {r.status}: {raw}")
-                data = json.loads(raw)
-    except Exception as e:
-        print(f"[Mistral Error] {e}")
-        raise
+    global mistral_last_request, mistral_rate_limited_until
+
+    for attempt in range(MISTRAL_MAX_RETRIES + 1):
+        now = time.time()
+        if now < mistral_rate_limited_until:
+            raise MistralRateLimitError(int(mistral_rate_limited_until - now))
+
+        try:
+            async with mistral_request_lock:
+                wait_time = MISTRAL_REQUEST_COOLDOWN - (time.time() - mistral_last_request)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                    async with session.post(MISTRAL_API_URL, headers=headers, json=payload) as r:
+                        raw = await r.text()
+                        mistral_last_request = time.time()
+
+                        if r.status == 429:
+                            retry_header = r.headers.get("Retry-After") or r.headers.get("retry-after")
+                            try:
+                                retry_after = int(float(retry_header)) if retry_header else MISTRAL_RATE_LIMIT_FALLBACK_SECONDS
+                            except (TypeError, ValueError):
+                                retry_after = MISTRAL_RATE_LIMIT_FALLBACK_SECONDS
+
+                            retry_after = max(1, retry_after)
+                            mistral_rate_limited_until = time.time() + retry_after
+                            print(f"[Mistral Rate Limit] retry_after={retry_after}s body={raw}")
+
+                            # Only wait inside the current request if the delay is small.
+                            if attempt < MISTRAL_MAX_RETRIES and retry_after <= 10:
+                                await asyncio.sleep(retry_after)
+                                continue
+
+                            raise MistralRateLimitError(retry_after)
+
+                        if r.status not in (200, 201):
+                            raise RuntimeError(f"Mistral API error {r.status}: {raw}")
+
+                        data = json.loads(raw)
+                        break
+
+        except MistralRateLimitError:
+            raise
+        except Exception as e:
+            print(f"[Mistral Error] {e}")
+            raise
+    else:
+        raise MistralRateLimitError(MISTRAL_RATE_LIMIT_FALLBACK_SECONDS)
 
     choices = data.get("choices") or []
     if not choices:
@@ -888,9 +939,14 @@ async def ai(
         save_memory()
         return reply, image_url, image_bytes
 
+    except MistralRateLimitError as e:
+        wait_text = f" Попробуй через {e.retry_after} сек." if e.retry_after else " Попробуй чуть позже."
+        print(f"Ошибка в ai(): Mistral rate limit, retry_after={e.retry_after}")
+        return f"**Сейчас лимит Mistral.{wait_text}**", None, None
+
     except Exception as e:
         print(f"Ошибка в ai(): {e}")
-        return f"Ошибка: {e}", None, None
+        return "**Произошла ошибка при ответе. Попробуй чуть позже.**", None, None
 
 
 async def send_v2(

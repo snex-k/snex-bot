@@ -60,9 +60,11 @@ SYSTEM_PROMPT_RU = (
     "Если пользователь отправил картинку, гифку или видео — сначала отреагируй именно на них. "
     "Не выдумывай детали, которых нет. Если чего-то не знаешь — скажи честно или задай короткий уточняющий вопрос. "
     "Не уходи в странные размышления или философию, отвечай практично и по реальному запросу пользователя. "
+    "Не морализируй и не делай драму из коротких сообщений, мата или оскорблений. "
+    "Если сообщение слишком короткое или непонятное — просто попроси пояснить коротко. "
     "Используй блок памяти, если он есть, но не повторяй его без причины. "
-    "Имя пользователя используй только при первом приветствии. "
-    "В конце каждого сообщения добавляй эмодзи  "
+    "Имя пользователя НЕ пиши в обычных ответах. Используй имя только в первом приветствии или если пользователь прямо спрашивает про имя. "
+    "Не добавляй в сообщение эмодзи"
     "Всегда оборачивай ответ в **жирный текст**. "
     "Если пользователь прямо просит сгенерировать изображение — используй generate_image. "
     "Для generate_image всегда пиши prompt на английском языке."
@@ -78,9 +80,10 @@ SYSTEM_PROMPT_EN = (
     "If the user sends an image, gif, or video — react to it first. "
     "Don't make up details that aren't there. If you don't know something, say it honestly or ask a short clarifying question. "
     "Don't drift into weird thoughts or philosophy; answer practically and stay on the user's real request. "
+    "Don't moralize or make drama from short messages, slang, profanity, or insults. "
+    "If a message is too short or unclear, simply ask for a short clarification. "
     "Use the memory block if it exists, but don't repeat it for no reason. "
-    "Use the user's name only on the first greeting. "
-    "Add the emoji  at the end of every message. "
+    "Do NOT write the user's name in normal replies. Use the name only in the first greeting or if the user directly asks about it. "
     "Always wrap your entire reply in **bold text**. "
     "If the user clearly asks to generate an image — use generate_image. "
     "For generate_image always write the prompt in English."
@@ -321,8 +324,6 @@ def update_user_memory_from_text(uid: int, text: str, username: str):
     if not clean:
         return
 
-    remember_fact(uid, f"Ник пользователя в Discord: {username}")
-
     patterns = [
         (r"(?:меня зовут|мо[ёе] имя)\s+([^,.!?]{2,40})", "Пользователя зовут {0}"),
         (r"мне\s+(\d{1,3})\s*(?:лет|года|год)?", "Пользователю {0} лет"),
@@ -344,7 +345,10 @@ def update_user_memory_from_text(uid: int, text: str, username: str):
 
 
 def build_memory_context(uid: int, lang: str) -> str:
-    facts = user_memories.get(uid, [])[-MAX_MEMORY_FACTS:]
+    facts = [
+        fact for fact in user_memories.get(uid, [])[-MAX_MEMORY_FACTS:]
+        if not fact.lower().startswith("ник пользователя")
+    ]
     summary = conversation_summaries.get(uid, "").strip()
 
     if not facts and not summary:
@@ -504,7 +508,7 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = T
         "model": MISTRAL_MODEL,
         "messages": messages,
         "max_tokens": 1024,
-        "temperature": 0.45,
+        "temperature": 0.35,
     }
     if use_tools:
         payload["tools"] = [generate_image_tool]
@@ -613,6 +617,28 @@ async def maybe_summarize_history(uid: int):
         print(f"[Memory] Summarize failed: {e}")
 
 
+def quick_reply_for_low_signal(text: str, lang: str) -> str | None:
+    """Deterministic replies for insults/very short unclear messages.
+    This prevents the model from overthinking and using the user's name.
+    """
+    clean = re.sub(r"\s+", " ", text).strip()
+    normalized = re.sub(r"[^\wа-яА-ЯёЁ]+", "", clean.lower())
+
+    if not normalized:
+        return "Напиши что-нибудь, а то пусто 😅" if lang == "Russian" else "Send something, it's empty 😅"
+
+    unclear = {"м", "мм", "мг", "мда", "хм", "эм", "ээ", "а", "?", "??"}
+    insults = {"даун", "дебил", "идиот", "лох", "тупой", "тупая", "дура", "дурак"}
+
+    if normalized in insults:
+        return "Без негатива, давай нормально 😅" if lang == "Russian" else "No negativity, let's talk normally 😅"
+
+    if normalized in unclear or len(normalized) <= 2:
+        return "Не поняла, поясни чуть-чуть 😅" if lang == "Russian" else "Didn't get that, explain a bit 😅"
+
+    return None
+
+
 async def ai(uid: int, text: str, username: str = "пользователь", force_lang: str = None):
     try:
         lang = force_lang or detect_language(text)
@@ -623,15 +649,27 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
 
         base_prompt = SYSTEM_PROMPT_RU if lang == "Russian" else SYSTEM_PROMPT_EN
         name_label = "Имя пользователя" if lang == "Russian" else "User's name"
+        no_name_rule = (
+            "Не обращайся к пользователю по имени в обычных ответах."
+            if lang == "Russian"
+            else "Do not address the user by name in normal replies."
+        )
         system_with_user = (
             base_prompt
-            + f"\n{name_label}: {username}."
+            + f"\n{name_label}: {username}. {no_name_rule}"
             + build_memory_context(uid, lang)
         )
 
         image_url = None
         image_bytes = None
         reply = None
+
+        quick_reply = quick_reply_for_low_signal(text, lang)
+        if quick_reply:
+            reply = f"**{quick_reply}**"
+            histories[uid].append({"role": "assistant", "content": reply})
+            save_memory()
+            return reply, None, None
 
         # Reliable image generation path: don't wait for the model to decide to call a tool.
         if is_image_request(text):

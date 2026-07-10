@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 import aiohttp
+from aiohttp import web
 import json
 import urllib.request
 import urllib.error
@@ -41,6 +42,8 @@ MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MISTRAL_REQUEST_COOLDOWN = env_float("MISTRAL_REQUEST_COOLDOWN", 1.5)
 MISTRAL_MAX_RETRIES = env_int("MISTRAL_MAX_RETRIES", 2)
 MISTRAL_RATE_LIMIT_FALLBACK_SECONDS = env_int("MISTRAL_RATE_LIMIT_FALLBACK_SECONDS", 30)
+PORT = env_int("PORT", 0)
+HEALTH_SERVER_ENABLED = env_bool("HEALTH_SERVER_ENABLED", True)
 MEMORY_FILE = Path(os.environ.get("MEMORY_FILE", "data/miko_memory.json"))
 DB_BACKEND = os.environ.get("DB_BACKEND", "auto").lower()  # auto/json/mongodb/supabase
 
@@ -88,6 +91,7 @@ last_server_context_save = 0.0
 mistral_request_lock = asyncio.Lock()
 mistral_last_request = 0.0
 mistral_rate_limited_until = 0.0
+health_runner = None
 
 # --- System prompts ---
 SYSTEM_PROMPT_RU = (
@@ -942,7 +946,7 @@ async def ai(
     except MistralRateLimitError as e:
         wait_text = f" Попробуй через {e.retry_after} сек." if e.retry_after else " Попробуй чуть позже."
         print(f"Ошибка в ai(): Mistral rate limit, retry_after={e.retry_after}")
-        return f"**Сейчас лимит Mistral <:mistral_ai:1524942153128874044>: {wait_text}**", None, None
+        return f"**Сейчас лимит Mistral.{wait_text}**", None, None
 
     except Exception as e:
         print(f"Ошибка в ai(): {e}")
@@ -1368,6 +1372,33 @@ async def on_message(message: discord.Message):
             print(f"Ошибка отправки: {e}")
 
 
+async def health_handler(request):
+    return web.Response(text="OK")
+
+
+async def start_health_server():
+    """Start a tiny HTTP server for Render Web Service health checks.
+
+    Discord bots are usually Render Background Workers and don't need a port.
+    But if the bot is deployed as a Web Service, Render expects something to bind
+    to $PORT; otherwise it can stay in Deploying and later kill the process.
+    """
+    global health_runner
+
+    if not HEALTH_SERVER_ENABLED or not PORT or health_runner is not None:
+        return
+
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/healthz", health_handler)
+
+    health_runner = web.AppRunner(app)
+    await health_runner.setup()
+    site = web.TCPSite(health_runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"[Health] HTTP server started on port {PORT}")
+
+
 @client.event
 async def on_ready():
     await client.change_presence(status=discord.Status.idle)
@@ -1377,5 +1408,10 @@ async def on_ready():
     print(f"Запущен: {client.user}")
 
 
-load_memory()
-client.run(TOKEN)
+async def main():
+    load_memory()
+    await start_health_server()
+    await client.start(TOKEN)
+
+
+asyncio.run(main())

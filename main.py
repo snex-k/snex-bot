@@ -11,7 +11,7 @@ import asyncio
 
 TOKEN = os.environ.get("TOKEN")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-latest")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 
 intents = discord.Intents.default()

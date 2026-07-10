@@ -13,6 +13,7 @@ import asyncio
 import random
 import time
 from pathlib import Path
+from html import escape
 
 def env_bool(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
@@ -95,6 +96,7 @@ mistral_request_lock = asyncio.Lock()
 mistral_last_request = 0.0
 mistral_rate_limited_until = 0.0
 health_runner = None
+BOT_STARTED_AT = time.time()
 
 # --- System prompts ---
 SYSTEM_PROMPT_RU = (
@@ -1375,8 +1377,93 @@ async def on_message(message: discord.Message):
             print(f"Ошибка отправки: {e}")
 
 
+def format_uptime(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}д")
+    if hours or days:
+        parts.append(f"{hours}ч")
+    if minutes or hours or days:
+        parts.append(f"{minutes}м")
+    parts.append(f"{seconds}с")
+    return " ".join(parts)
+
+
 async def health_handler(request):
+    # Keep this plain OK for Render health checks.
     return web.Response(text="OK")
+
+
+def build_status_payload() -> dict:
+    return {
+        "status": "online" if client.is_ready() else "starting",
+        "bot": str(client.user) if client.user else None,
+        "uptime_seconds": int(time.time() - BOT_STARTED_AT),
+        "guilds": len(client.guilds),
+        "users": sum((guild.member_count or 0) for guild in client.guilds),
+        "started_at": datetime.datetime.fromtimestamp(BOT_STARTED_AT).strftime("%Y-%m-%d %H:%M:%S"),
+        "latency_ms": round(client.latency * 1000, 2) if client.latency else None,
+        "model": MISTRAL_MODEL,
+        "db_backend": selected_db_backend(),
+        "random_chat_enabled": RANDOM_CHAT_ENABLED,
+        "random_reply_chance": RANDOM_REPLY_CHANCE,
+    }
+
+
+async def status_json_handler(request):
+    try:
+        return web.json_response(build_status_payload())
+    except Exception as e:
+        print(f"[Status] JSON error: {e}", flush=True)
+        return web.json_response({
+            "status": "starting",
+            "error": "status_unavailable",
+            "uptime_seconds": int(time.time() - BOT_STARTED_AT),
+        })
+
+
+async def index_handler(request):
+    template_path = Path(__file__).with_name("index.html")
+
+    bot_name = escape(str(client.user) if client.user else "Miko")
+    status_ru = "Онлайн" if client.is_ready() else "Запускается"
+    latency = f"{client.latency * 1000:.0f} мс" if client.latency else "—"
+    uptime = format_uptime(time.time() - BOT_STARTED_AT)
+    guild_count = str(len(client.guilds))
+    user_count = str(sum((guild.member_count or 0) for guild in client.guilds))
+    db_backend = escape(selected_db_backend())
+    model = escape(MISTRAL_MODEL)
+    random_chance = f"{RANDOM_REPLY_CHANCE * 100:.1f}%" if RANDOM_CHAT_ENABLED else "выключено"
+    started_at = datetime.datetime.fromtimestamp(BOT_STARTED_AT).strftime("%Y-%m-%d %H:%M:%S")
+
+    status_data = json.dumps(build_status_payload(), ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    replacements = {
+        "{{STATUS_DATA}}": status_data,
+        "{{BOT_NAME}}": bot_name,
+        "{{STATUS_RU}}": status_ru,
+        "{{LATENCY}}": latency,
+        "{{UPTIME}}": uptime,
+        "{{GUILD_COUNT}}": guild_count,
+        "{{USER_COUNT}}": user_count,
+        "{{DB_BACKEND}}": db_backend,
+        "{{MODEL}}": model,
+        "{{RANDOM_CHANCE}}": random_chance,
+        "{{STARTED_AT}}": started_at,
+    }
+
+    try:
+        html = template_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        html = "<h1>Miko Bot</h1><p>Status: {{STATUS_RU}}</p><p>Bot: {{BOT_NAME}}</p>"
+
+    for key, value in replacements.items():
+        html = html.replace(key, value)
+
+    return web.Response(text=html, content_type="text/html")
 
 
 async def start_health_server():
@@ -1398,8 +1485,9 @@ async def start_health_server():
         return
 
     app = web.Application()
-    app.router.add_get("/", health_handler)
+    app.router.add_get("/", index_handler)
     app.router.add_get("/healthz", health_handler)
+    app.router.add_get("/status.json", status_json_handler)
 
     health_runner = web.AppRunner(app)
     await health_runner.setup()

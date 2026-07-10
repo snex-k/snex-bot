@@ -1385,7 +1385,13 @@ async def start_health_server():
     """
     global health_runner
 
-    if not HEALTH_SERVER_ENABLED or not PORT or health_runner is not None:
+    if not HEALTH_SERVER_ENABLED:
+        print("[Health] Disabled", flush=True)
+        return
+    if not PORT:
+        print("[Health] PORT is not set; health server not started", flush=True)
+        return
+    if health_runner is not None:
         return
 
     app = web.Application()
@@ -1396,7 +1402,7 @@ async def start_health_server():
     await health_runner.setup()
     site = web.TCPSite(health_runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"[Health] HTTP server started on port {PORT}")
+    print(f"[Health] HTTP server started on 0.0.0.0:{PORT}", flush=True)
 
 
 @client.event
@@ -1405,12 +1411,14 @@ async def on_ready():
     for guild in client.guilds:
         await tree.sync(guild=guild)
     await tree.sync()
-    print(f"Запущен: {client.user}")
+    print(f"Запущен: {client.user}", flush=True)
 
 
 async def main():
-    load_memory()
+    # Start HTTP health server first, so Render Web Service becomes healthy
+    # even if DB/Discord initialization takes longer.
     await start_health_server()
+    load_memory()
     await client.start(TOKEN)
 
 

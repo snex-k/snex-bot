@@ -3,16 +3,39 @@ from discord import app_commands
 import aiohttp
 import json
 import urllib.parse
+import urllib.request
+import urllib.error
 import re
 import os
 import datetime
 import unicodedata
 import asyncio
+from pathlib import Path
 
 TOKEN = os.environ.get("TOKEN")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
-MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-large-latest")
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
+MEMORY_FILE = Path(os.environ.get("MEMORY_FILE", "data/miko_memory.json"))
+DB_BACKEND = os.environ.get("DB_BACKEND", "auto").lower()  # auto/json/mongodb/supabase
+
+# MongoDB settings
+MONGODB_URI = os.environ.get("MONGODB_URI")
+MONGODB_DB = os.environ.get("MONGODB_DB", "miko_bot")
+MONGODB_COLLECTION = os.environ.get("MONGODB_COLLECTION", "memory")
+
+# Supabase settings (Supabase = PostgreSQL + REST API)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    or os.environ.get("SUPABASE_KEY")
+    or os.environ.get("SUPABASE_ANON_KEY")
+)
+SUPABASE_TABLE = os.environ.get("SUPABASE_TABLE", "miko_memory")
+
+MAX_RECENT_MESSAGES = 40
+SUMMARIZE_AFTER_MESSAGES = 70
+MAX_MEMORY_FACTS = 40
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,6 +46,8 @@ tree = app_commands.CommandTree(client)
 histories: dict[int, list[dict]] = {}
 user_thread: dict[int, int] = {}
 allowed_channels: dict[int, list[int]] = {}
+user_memories: dict[int, list[str]] = {}
+conversation_summaries: dict[int, str] = {}
 
 # --- System prompts ---
 SYSTEM_PROMPT_RU = (
@@ -33,10 +58,11 @@ SYSTEM_PROMPT_RU = (
     "Общайся на 'ты'. Всегда отвечай только на русском языке. "
     "Пиши легко, с эмоциями и вайбом обычного чата. "
     "Если пользователь отправил картинку, гифку или видео — сначала отреагируй именно на них. "
-    "Не выдумывай детали, которых нет. "
-    "Не уходи в странные размышления или философию. "
+    "Не выдумывай детали, которых нет. Если чего-то не знаешь — скажи честно или задай короткий уточняющий вопрос. "
+    "Не уходи в странные размышления или философию, отвечай практично и по реальному запросу пользователя. "
+    "Используй блок памяти, если он есть, но не повторяй его без причины. "
     "Имя пользователя используй только при первом приветствии. "
-    "В конце каждого сообщения добавляй эмодзи <:mistral_ai:1524942153128874044>"
+    "В конце каждого сообщения добавляй эмодзи  "
     "Всегда оборачивай ответ в **жирный текст**. "
     "Если пользователь прямо просит сгенерировать изображение — используй generate_image. "
     "Для generate_image всегда пиши prompt на английском языке."
@@ -50,10 +76,11 @@ SYSTEM_PROMPT_EN = (
     "Address the user casually. Always reply only in English. "
     "Write with emotion and the vibe of a normal chat. "
     "If the user sends an image, gif, or video — react to it first. "
-    "Don't make up details that aren't there. "
-    "Don't drift into weird thoughts or philosophy. "
+    "Don't make up details that aren't there. If you don't know something, say it honestly or ask a short clarifying question. "
+    "Don't drift into weird thoughts or philosophy; answer practically and stay on the user's real request. "
+    "Use the memory block if it exists, but don't repeat it for no reason. "
     "Use the user's name only on the first greeting. "
-    "Add the emoji  at the end of every message. <:mistral_ai:1524942153128874044>"
+    "Add the emoji  at the end of every message. "
     "Always wrap your entire reply in **bold text**. "
     "If the user clearly asks to generate an image — use generate_image. "
     "For generate_image always write the prompt in English."
@@ -63,12 +90,331 @@ SYSTEM_PROMPT_EN = (
 # Например: mistral-large-latest, ministral-8b-latest, open-mistral-nemo.
 
 
+def _to_int_key_dict(data: dict, default=None):
+    result = {}
+    if not isinstance(data, dict):
+        return default or result
+    for key, value in data.items():
+        try:
+            result[int(key)] = value
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def selected_db_backend() -> str:
+    """Choose where memory is stored."""
+    if DB_BACKEND in ("mongo", "mongodb"):
+        return "mongodb"
+    if DB_BACKEND in ("supa", "supabase"):
+        return "supabase"
+    if DB_BACKEND == "json":
+        return "json"
+
+    # auto mode
+    if MONGODB_URI:
+        return "mongodb"
+    if SUPABASE_URL and SUPABASE_KEY:
+        return "supabase"
+    return "json"
+
+
+def memory_payload() -> dict:
+    """Convert all in-memory state to a JSON/DB-safe dict."""
+    return {
+        "histories": {str(k): v for k, v in histories.items()},
+        "user_thread": {str(k): v for k, v in user_thread.items()},
+        "allowed_channels": {str(k): v for k, v in allowed_channels.items()},
+        "user_memories": {str(k): v[-MAX_MEMORY_FACTS:] for k, v in user_memories.items()},
+        "conversation_summaries": {str(k): v for k, v in conversation_summaries.items()},
+    }
+
+
+def apply_memory_payload(data: dict):
+    """Load a JSON/DB dict into in-memory state."""
+    global histories, user_thread, allowed_channels, user_memories, conversation_summaries
+
+    if not isinstance(data, dict):
+        return
+
+    histories = _to_int_key_dict(data.get("histories", {}))
+    user_thread = {int(k): int(v) for k, v in data.get("user_thread", {}).items()}
+    allowed_channels = {
+        int(k): [int(channel_id) for channel_id in v]
+        for k, v in data.get("allowed_channels", {}).items()
+        if isinstance(v, list)
+    }
+    user_memories = {
+        int(k): [str(item) for item in v if str(item).strip()]
+        for k, v in data.get("user_memories", {}).items()
+        if isinstance(v, list)
+    }
+    conversation_summaries = {
+        int(k): str(v)
+        for k, v in data.get("conversation_summaries", {}).items()
+        if str(v).strip()
+    }
+
+
+def load_memory_json() -> dict | None:
+    if not MEMORY_FILE.exists():
+        return None
+    return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+
+
+def save_memory_json(data: dict):
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = MEMORY_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(MEMORY_FILE)
+
+
+def load_memory_mongodb() -> dict | None:
+    if not MONGODB_URI:
+        raise RuntimeError("Не задан MONGODB_URI")
+
+    from pymongo import MongoClient
+
+    mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    collection = mongo[MONGODB_DB][MONGODB_COLLECTION]
+    doc = collection.find_one({"_id": "state"})
+    mongo.close()
+    return doc.get("data") if doc else None
+
+
+def save_memory_mongodb(data: dict):
+    if not MONGODB_URI:
+        raise RuntimeError("Не задан MONGODB_URI")
+
+    from pymongo import MongoClient
+
+    mongo = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    collection = mongo[MONGODB_DB][MONGODB_COLLECTION]
+    collection.update_one(
+        {"_id": "state"},
+        {"$set": {"data": data, "updated_at": datetime.datetime.utcnow()}},
+        upsert=True
+    )
+    mongo.close()
+
+
+def supabase_request(method: str, path: str, body: dict | list | None = None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Нужны SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY/SUPABASE_KEY")
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{path.lstrip('/')}"
+    payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=10) as response:
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else None
+
+
+def load_memory_supabase() -> dict | None:
+    rows = supabase_request("GET", f"{SUPABASE_TABLE}?id=eq.state&select=data")
+    if rows and isinstance(rows, list):
+        return rows[0].get("data")
+    return None
+
+
+def save_memory_supabase(data: dict):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Нужны SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY/SUPABASE_KEY")
+
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{SUPABASE_TABLE}"
+    body = json.dumps({"id": "state", "data": data}, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as response:
+        response.read()
+
+
+def load_memory():
+    """Load persistent chat memory from MongoDB, Supabase, or local JSON."""
+    backend = selected_db_backend()
+    data = None
+
+    try:
+        if backend == "mongodb":
+            data = load_memory_mongodb()
+        elif backend == "supabase":
+            data = load_memory_supabase()
+        else:
+            data = load_memory_json()
+
+        if data:
+            apply_memory_payload(data)
+            print(f"[Memory] Loaded from {backend}")
+        else:
+            print(f"[Memory] No saved memory in {backend}")
+
+    except Exception as e:
+        print(f"[Memory] Load from {backend} failed: {e}")
+        # Fallback to local JSON backup if DB is unavailable.
+        try:
+            data = load_memory_json()
+            if data:
+                apply_memory_payload(data)
+                print(f"[Memory] Loaded from local JSON fallback: {MEMORY_FILE}")
+        except Exception as e2:
+            print(f"[Memory] JSON fallback load failed: {e2}")
+
+
+def save_memory():
+    """Save persistent chat memory to MongoDB, Supabase, or local JSON."""
+    backend = selected_db_backend()
+    data = memory_payload()
+
+    try:
+        if backend == "mongodb":
+            save_memory_mongodb(data)
+        elif backend == "supabase":
+            save_memory_supabase(data)
+        else:
+            save_memory_json(data)
+
+        # Keep a small local backup even when DB is used.
+        if backend != "json":
+            save_memory_json(data)
+
+    except Exception as e:
+        print(f"[Memory] Save to {backend} failed: {e}")
+        try:
+            save_memory_json(data)
+            print(f"[Memory] Saved local JSON fallback: {MEMORY_FILE}")
+        except Exception as e2:
+            print(f"[Memory] JSON fallback save failed: {e2}")
+
+
+def remember_fact(uid: int, fact: str):
+    fact = re.sub(r"\s+", " ", fact).strip(" .")
+    if not fact or len(fact) < 4:
+        return
+
+    facts = user_memories.setdefault(uid, [])
+    normalized = fact.casefold()
+    if any(item.casefold() == normalized for item in facts):
+        return
+
+    facts.append(fact)
+    if len(facts) > MAX_MEMORY_FACTS:
+        del facts[:-MAX_MEMORY_FACTS]
+
+
+def update_user_memory_from_text(uid: int, text: str, username: str):
+    """Small fast memory extractor for stable user facts/preferences."""
+    clean = re.sub(r"\s+", " ", text).strip()
+    if not clean:
+        return
+
+    remember_fact(uid, f"Ник пользователя в Discord: {username}")
+
+    patterns = [
+        (r"(?:меня зовут|мо[ёе] имя)\s+([^,.!?]{2,40})", "Пользователя зовут {0}"),
+        (r"мне\s+(\d{1,3})\s*(?:лет|года|год)?", "Пользователю {0} лет"),
+        (r"я\s+(?:живу|нахожусь)\s+в\s+([^,.!?]{2,60})", "Пользователь живёт в {0}"),
+        (r"я\s+(люблю|обожаю|ненавижу|предпочитаю|играю|учусь|работаю|занимаюсь)\s+([^.!?]{2,100})", "Пользователь {0} {1}"),
+        (r"у меня\s+([^.!?]{2,120})", "У пользователя {0}"),
+        (r"мой\s+([^.!?]{2,120})", "Пользователь сказал: мой {0}"),
+        (r"моя\s+([^.!?]{2,120})", "Пользователь сказал: моя {0}"),
+        (r"моё\s+([^.!?]{2,120})", "Пользователь сказал: моё {0}"),
+        (r"мое\s+([^.!?]{2,120})", "Пользователь сказал: мое {0}"),
+    ]
+
+    lowered = clean.lower()
+    for pattern, template in patterns:
+        for match in re.finditer(pattern, lowered, flags=re.IGNORECASE):
+            groups = [g.strip(" ,.") for g in match.groups()]
+            if groups:
+                remember_fact(uid, template.format(*groups))
+
+
+def build_memory_context(uid: int, lang: str) -> str:
+    facts = user_memories.get(uid, [])[-MAX_MEMORY_FACTS:]
+    summary = conversation_summaries.get(uid, "").strip()
+
+    if not facts and not summary:
+        return ""
+
+    if lang == "Russian":
+        parts = ["\nПамять о пользователе и прошлых диалогах:"]
+        if facts:
+            parts.append("Факты: " + "; ".join(facts))
+        if summary:
+            parts.append("Краткая сводка прошлой переписки: " + summary)
+        parts.append("Используй это только когда уместно. Не придумывай новые факты.")
+    else:
+        parts = ["\nMemory about the user and previous chats:"]
+        if facts:
+            parts.append("Facts: " + "; ".join(facts))
+        if summary:
+            parts.append("Previous chat summary: " + summary)
+        parts.append("Use this only when relevant. Do not invent new facts.")
+
+    return "\n".join(parts)
+
+
 def detect_language(text: str) -> str:
     cyrillic = sum(1 for c in text if unicodedata.category(c) in ("Ll", "Lu") and "CYRILLIC" in unicodedata.name(c, ""))
     latin = sum(1 for c in text if unicodedata.category(c) in ("Ll", "Lu") and "LATIN" in unicodedata.name(c, ""))
     if cyrillic > latin:
         return "Russian"
     return "English"
+
+
+def is_image_request(text: str) -> bool:
+    lowered = text.lower()
+
+    ru_action = any(word in lowered for word in (
+        "сгенерируй", "генерируй", "создай", "сделай", "нарисуй", "изобрази"
+    ))
+    ru_object = any(word in lowered for word in (
+        "картин", "изображ", "фото", "арт", "рисунок", "аватар", "обои"
+    ))
+
+    en_action = any(word in lowered for word in (
+        "generate", "create", "draw", "make"
+    ))
+    en_object = any(word in lowered for word in (
+        "image", "picture", "photo", "art", "drawing", "avatar", "wallpaper"
+    ))
+
+    # "нарисуй кота" usually means image even without the word "картинка".
+    return (ru_action and (ru_object or "нарисуй" in lowered or "изобрази" in lowered)) or (en_action and en_object)
+
+
+def extract_image_description(text: str) -> str:
+    description = text.strip()
+    description = re.sub(
+        r"(?i)^(?:пожалуйста[, ]*)?(?:сгенерируй|генерируй|создай|сделай|нарисуй|изобрази)\s*",
+        "",
+        description
+    )
+    description = re.sub(
+        r"(?i)^(?:generate|create|draw|make)\s+(?:an?\s+)?(?:image|picture|photo|art|drawing|avatar|wallpaper)\s*(?:of|with|about)?\s*",
+        "",
+        description
+    )
+    description = re.sub(
+        r"(?i)^(?:картинку|изображение|фото|арт|рисунок|аватар|обои)\s*(?:с|про|на тему)?\s*",
+        "",
+        description
+    )
+    return description.strip(" .,!?:;—-") or text.strip() or "beautiful scenery"
 
 
 # --- Mistral Function Declaration for Image Generation ---
@@ -108,9 +454,13 @@ async def execute_tool(tool_name: str, args: dict):
                         image_bytes = await r.read()
                         print(f"[IMG] Downloaded {len(image_bytes)} bytes")
                         return f"IMAGE_BYTES:{url}", image_bytes
+
+                    print(f"[IMG] Pollinations status {r.status}: {await r.text()}")
         except Exception as e:
             print(f"[IMG] Download failed: {e}")
-            return f"IMAGE:{url}", None
+
+        # Even if downloading failed, Discord can still try to render the direct image URL.
+        return f"IMAGE:{url}", None
     return "Неизвестное действие.", None
 
 
@@ -122,32 +472,39 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = T
     messages = [{"role": "system", "content": system_prompt}]
 
     # Convert internal history to Mistral/OpenAI-compatible message format.
+    # Tool messages are included only if their matching assistant tool_call is also in context.
+    pending_tool_ids = set()
     for msg in history:
         role = msg.get("role")
         content = msg.get("content")
 
         if role in ("user", "assistant"):
             if role == "assistant" and msg.get("tool_calls"):
+                tool_calls = msg["tool_calls"]
                 messages.append({
                     "role": "assistant",
                     "content": content or "",
-                    "tool_calls": msg["tool_calls"]
+                    "tool_calls": tool_calls
                 })
+                for tool_call in tool_calls:
+                    if tool_call.get("id"):
+                        pending_tool_ids.add(tool_call["id"])
             elif content:
                 messages.append({"role": role, "content": content})
 
-        elif role == "tool" and msg.get("tool_call_id"):
+        elif role == "tool" and msg.get("tool_call_id") in pending_tool_ids:
             messages.append({
                 "role": "tool",
                 "tool_call_id": msg["tool_call_id"],
                 "content": content or ""
             })
+            pending_tool_ids.discard(msg["tool_call_id"])
 
     payload = {
         "model": MISTRAL_MODEL,
         "messages": messages,
         "max_tokens": 1024,
-        "temperature": 0.8,
+        "temperature": 0.45,
     }
     if use_tools:
         payload["tools"] = [generate_image_tool]
@@ -173,27 +530,127 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = T
     choices = data.get("choices") or []
     if not choices:
         return {"role": "assistant", "content": "..."}
-    return choices[0].get("message") or {"role": "assistant", "content": "..."}
+
+    message = choices[0].get("message") or {"role": "assistant", "content": "..."}
+    content = message.get("content")
+    if isinstance(content, list):
+        message["content"] = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    return message
+
+
+async def build_image_prompt(text: str, lang: str) -> str:
+    """Make a clean English prompt for image generation."""
+    description = extract_image_description(text)
+
+    if not MISTRAL_API_KEY:
+        return description
+
+    try:
+        response = await mistral_request(
+            "You convert user image requests into one clear, detailed English prompt for an image generator. "
+            "Return only the prompt, no quotes, no markdown, no explanation. Do not add unsafe or sexual details.",
+            [{"role": "user", "content": description}],
+            use_tools=False
+        )
+        prompt = (response.get("content") or "").strip().strip('"')
+        prompt = re.sub(r"^```.*?\n|```$", "", prompt, flags=re.DOTALL).strip()
+        if prompt:
+            return prompt[:900]
+    except Exception as e:
+        print(f"[IMG] Prompt improve failed: {e}")
+
+    return description[:900]
+
+
+async def maybe_summarize_history(uid: int):
+    """Compress old messages into a persistent summary so long-term memory stays useful."""
+    history = histories.get(uid, [])
+    if len(history) <= SUMMARIZE_AFTER_MESSAGES or not MISTRAL_API_KEY:
+        return
+
+    old_messages = history[:-MAX_RECENT_MESSAGES]
+    recent_messages = history[-MAX_RECENT_MESSAGES:]
+
+    lines = []
+    for msg in old_messages:
+        role = msg.get("role", "")
+        content = msg.get("content")
+        if not content:
+            continue
+        if role == "tool":
+            continue
+        lines.append(f"{role}: {content}")
+
+    if not lines:
+        histories[uid] = recent_messages
+        save_memory()
+        return
+
+    previous_summary = conversation_summaries.get(uid, "")
+    source_text = "\n".join(lines)[-12000:]
+
+    try:
+        response = await mistral_request(
+            "Ты сжимаешь историю Discord-диалога в полезную память для ассистента. "
+            "Сохраняй только стабильные факты о пользователе, его предпочтения, важные решения и незакрытые темы. "
+            "Не выдумывай ничего. Пиши кратко на русском.",
+            [{
+                "role": "user",
+                "content": f"Прошлая сводка:\n{previous_summary or 'нет'}\n\nНовые старые сообщения:\n{source_text}"
+            }],
+            use_tools=False
+        )
+        summary = (response.get("content") or "").strip()
+        if summary:
+            conversation_summaries[uid] = summary[:3000]
+            histories[uid] = recent_messages
+            save_memory()
+            print(f"[Memory] Summarized history for user {uid}")
+    except Exception as e:
+        print(f"[Memory] Summarize failed: {e}")
 
 
 async def ai(uid: int, text: str, username: str = "пользователь", force_lang: str = None):
     try:
         lang = force_lang or detect_language(text)
+        histories.setdefault(uid, [])
         histories[uid].append({"role": "user", "content": text})
+        update_user_memory_from_text(uid, text, username)
+        await maybe_summarize_history(uid)
 
         base_prompt = SYSTEM_PROMPT_RU if lang == "Russian" else SYSTEM_PROMPT_EN
         name_label = "Имя пользователя" if lang == "Russian" else "User's name"
-        system_with_user = base_prompt + f"\n{name_label}: {username}."
-
-        # Slice last 30 messages for context
-        context = histories[uid][-30:]
-
-        # First call — with tools
-        response = await mistral_request(system_with_user, context, use_tools=True)
+        system_with_user = (
+            base_prompt
+            + f"\n{name_label}: {username}."
+            + build_memory_context(uid, lang)
+        )
 
         image_url = None
         image_bytes = None
         reply = None
+
+        # Reliable image generation path: don't wait for the model to decide to call a tool.
+        if is_image_request(text):
+            prompt = await build_image_prompt(text, lang)
+            tool_result, img_data = await execute_tool("generate_image", {"prompt": prompt})
+            if tool_result.startswith("IMAGE"):
+                image_url = tool_result.split(":", 1)[1] if ":" in tool_result else tool_result
+                image_bytes = img_data
+
+            reply = "Готово, сгенерировала картинку ✨" if lang == "Russian" else "Done, I generated the image ✨"
+            histories[uid].append({"role": "assistant", "content": f"**{reply}**"})
+            save_memory()
+            return f"**{reply}**", image_url, image_bytes
+
+        # Slice recent messages for context; older context is stored in conversation_summaries.
+        context = histories[uid][-MAX_RECENT_MESSAGES:]
+
+        # First call — with tools
+        response = await mistral_request(system_with_user, context, use_tools=True)
 
         # Check if model wants to call a function
         tool_calls = response.get("tool_calls") or []
@@ -255,7 +712,7 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
                 })
 
             # Second call — without tools to get final text
-            context2 = histories[uid][-30:]
+            context2 = histories[uid][-MAX_RECENT_MESSAGES:]
             response2 = await mistral_request(system_with_user, context2, use_tools=False)
             reply = response2.get("content") or "Готово!"
         else:
@@ -273,6 +730,7 @@ async def ai(uid: int, text: str, username: str = "пользователь", fo
             reply = f"**{reply.strip('*')}**"
 
         histories[uid].append({"role": "assistant", "content": reply})
+        save_memory()
         return reply, image_url, image_bytes
 
     except Exception as e:
@@ -295,7 +753,7 @@ async def send_v2(
     inner = [
         {
             "type": 9,
-            "components": [{"type": 10, "content": f"# **{username}** <:mistral_ai:1524942153128874044>"}],
+            "components": [{"type": 10, "content": f"# **{username}**"}],
             "accessory": {"type": 11, "media": {"url": avatar_url}},
         },
         {"type": 14, "divider": True, "spacing": 1},
@@ -445,6 +903,7 @@ async def end_dialog(uid: int, interaction: discord.Interaction):
     await interaction.response.send_message("**Чат завершён. Ветка удаляется...**")
     user_thread.pop(uid, None)
     histories.pop(uid, None)
+    save_memory()
     try:
         await channel.delete()
     except Exception as e:
@@ -522,6 +981,7 @@ async def miko(interaction: discord.Interaction):
         else:
             user_thread.pop(uid, None)
             histories.pop(uid, None)
+            save_memory()
 
     histories[uid] = []
 
@@ -532,6 +992,7 @@ async def miko(interaction: discord.Interaction):
     )
     await thread.add_user(interaction.user)
     user_thread[uid] = thread.id
+    save_memory()
 
     await interaction.followup.send(
         f" **Твой чат: {thread.mention}**",
@@ -571,8 +1032,10 @@ async def setchannel(interaction: discord.Interaction):
 
     if channel_id in ch_list:
         ch_list.remove(channel_id)
+        save_memory()
         if not ch_list:
             del allowed_channels[guild_id]
+            save_memory()
             await interaction.response.send_message(
                 "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
                 ephemeral=True
@@ -599,8 +1062,10 @@ async def setchannel(interaction: discord.Interaction):
 
     if channel_id in ch_list:
         ch_list.remove(channel_id)
+        save_memory()
         if not ch_list:
             del allowed_channels[guild_id]
+            save_memory()
             await interaction.response.send_message(
                 "<:checkmark:1504023759101886607> **Канал убран. Теперь** `/miko` **работает везде.**",
                 ephemeral=True
@@ -624,6 +1089,7 @@ async def setchannel(interaction: discord.Interaction):
         return
 
     ch_list.append(channel_id)
+    save_memory()
     mentions = [interaction.guild.get_channel(c).mention for c in ch_list if interaction.guild.get_channel(c)]
     await interaction.response.send_message(
         f"<:checkmark:1504023759101886607> **Канал добавлен!**\nАктивные каналы: {', '.join(mentions)}",
@@ -646,6 +1112,7 @@ async def on_message(message: discord.Message):
             user_thread[uid] = channel.id
             if uid not in histories:
                 histories[uid] = []
+            save_memory()
         else:
             return
     display_name = message.author.display_name
@@ -677,4 +1144,5 @@ async def on_ready():
     print(f"Запущен: {client.user}")
 
 
+load_memory()
 client.run(TOKEN)

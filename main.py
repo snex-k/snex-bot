@@ -77,6 +77,9 @@ RANDOM_CHAT_ENABLED = env_bool("RANDOM_CHAT_ENABLED", True)
 REPLY_ON_MENTION = env_bool("REPLY_ON_MENTION", True)
 RANDOM_REPLY_CHANCE = env_float("RANDOM_REPLY_CHANCE", 0.01)  # 0.01 = 1% шанс
 RANDOM_REPLY_COOLDOWN = env_int("RANDOM_REPLY_COOLDOWN", 240)  # секунд на канал
+USER_AI_COOLDOWN = env_float("USER_AI_COOLDOWN", 3.0)
+MAX_USER_HISTORY = env_int("MAX_USER_HISTORY", 120)
+LOG_CHANNEL_ID = env_int("LOG_CHANNEL_ID", 0)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -90,7 +93,18 @@ allowed_channels: dict[int, list[int]] = {}
 user_memories: dict[int, list[str]] = {}
 conversation_summaries: dict[int, str] = {}
 guild_recent_messages: dict[int, list[dict]] = {}
+guild_settings: dict[int, dict] = {}
+bot_stats: dict[str, int] = {
+    "messages_seen": 0,
+    "ai_requests": 0,
+    "public_replies": 0,
+    "private_replies": 0,
+    "errors": 0,
+    "rate_limits": 0,
+    "memory_saves": 0,
+}
 random_reply_last: dict[int, float] = {}
+user_ai_last: dict[int, float] = {}
 last_server_context_save = 0.0
 mistral_request_lock = asyncio.Lock()
 mistral_last_request = 0.0
@@ -168,6 +182,54 @@ def selected_db_backend() -> str:
     return "json"
 
 
+def inc_stat(name: str, amount: int = 1):
+    bot_stats[name] = int(bot_stats.get(name, 0)) + amount
+
+
+def get_guild_setting(guild_id: int, key: str, default=None):
+    if not guild_id:
+        return default
+    return guild_settings.get(int(guild_id), {}).get(key, default)
+
+
+def set_guild_setting(guild_id: int, key: str, value):
+    if not guild_id:
+        return
+    settings = guild_settings.setdefault(int(guild_id), {})
+    settings[key] = value
+    save_memory()
+
+
+def cleanup_memory_state():
+    """Keep saved memory compact and remove obsolete tool messages."""
+    for uid, history in list(histories.items()):
+        cleaned = []
+        for msg in history:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "tool" or msg.get("tool_calls"):
+                continue
+            if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                content = re.sub(r"\s+", " ", str(msg.get("content", ""))).strip()
+                if content:
+                    cleaned.append({"role": msg["role"], "content": content[:2000]})
+        histories[uid] = cleaned[-MAX_USER_HISTORY:]
+
+    for uid, facts in list(user_memories.items()):
+        unique = []
+        seen = set()
+        for fact in facts:
+            fact = re.sub(r"\s+", " ", str(fact)).strip()[:300]
+            norm = fact.casefold()
+            if fact and norm not in seen:
+                unique.append(fact)
+                seen.add(norm)
+        user_memories[uid] = unique[-MAX_MEMORY_FACTS:]
+
+    for gid, messages in list(guild_recent_messages.items()):
+        guild_recent_messages[gid] = [m for m in messages if isinstance(m, dict)][-MAX_SERVER_MESSAGES:]
+
+
 def memory_payload() -> dict:
     """Convert all in-memory state to a JSON/DB-safe dict."""
     return {
@@ -177,12 +239,14 @@ def memory_payload() -> dict:
         "user_memories": {str(k): v[-MAX_MEMORY_FACTS:] for k, v in user_memories.items()},
         "conversation_summaries": {str(k): v for k, v in conversation_summaries.items()},
         "guild_recent_messages": {str(k): v[-MAX_SERVER_MESSAGES:] for k, v in guild_recent_messages.items()},
+        "guild_settings": {str(k): v for k, v in guild_settings.items()},
+        "bot_stats": bot_stats,
     }
 
 
 def apply_memory_payload(data: dict):
     """Load a JSON/DB dict into in-memory state."""
-    global histories, user_thread, allowed_channels, user_memories, conversation_summaries, guild_recent_messages
+    global histories, user_thread, allowed_channels, user_memories, conversation_summaries, guild_recent_messages, guild_settings, bot_stats
 
     if not isinstance(data, dict):
         return
@@ -209,6 +273,17 @@ def apply_memory_payload(data: dict):
         for k, v in data.get("guild_recent_messages", {}).items()
         if isinstance(v, list)
     }
+    guild_settings = {
+        int(k): v for k, v in data.get("guild_settings", {}).items()
+        if isinstance(v, dict)
+    }
+    loaded_stats = data.get("bot_stats", {})
+    if isinstance(loaded_stats, dict):
+        for key, value in loaded_stats.items():
+            try:
+                bot_stats[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
 
 
 def load_memory_json() -> dict | None:
@@ -332,6 +407,7 @@ def load_memory():
 def save_memory():
     """Save persistent chat memory to MongoDB, Supabase, or local JSON."""
     backend = selected_db_backend()
+    cleanup_memory_state()
     data = memory_payload()
 
     try:
@@ -345,6 +421,8 @@ def save_memory():
         # Keep a small local backup even when DB is used.
         if backend != "json":
             save_memory_json(data)
+
+        inc_stat("memory_saves")
 
     except Exception as e:
         print(f"[Memory] Save to {backend} failed: {e}")
@@ -518,6 +596,7 @@ async def mistral_request(system_prompt: str, history: list, use_tools: bool = F
                         mistral_last_request = time.time()
 
                         if r.status == 429:
+                            inc_stat("rate_limits")
                             retry_header = r.headers.get("Retry-After") or r.headers.get("retry-after")
                             try:
                                 retry_after = int(float(retry_header)) if retry_header else MISTRAL_RATE_LIMIT_FALLBACK_SECONDS
@@ -781,7 +860,13 @@ def build_recent_assistant_context(uid: int, lang: str) -> str:
 
 
 def should_reply_in_public_chat(message: discord.Message) -> bool:
-    if not RANDOM_CHAT_ENABLED or not message.guild:
+    if not message.guild:
+        return False
+
+    guild_random_enabled = bool(get_guild_setting(message.guild.id, "random_chat_enabled", RANDOM_CHAT_ENABLED))
+    guild_random_chance = float(get_guild_setting(message.guild.id, "random_reply_chance", RANDOM_REPLY_CHANCE))
+
+    if not guild_random_enabled and not REPLY_ON_MENTION:
         return False
 
     if not is_channel_allowed(message.guild.id, message.channel.id):
@@ -805,7 +890,7 @@ def should_reply_in_public_chat(message: discord.Message) -> bool:
     if text.startswith(("/", "!", ".")):
         return False
 
-    if RANDOM_REPLY_CHANCE <= 0 or len(text) < 5:
+    if not guild_random_enabled or guild_random_chance <= 0 or len(text) < 5:
         return False
 
     now = time.time()
@@ -813,7 +898,7 @@ def should_reply_in_public_chat(message: discord.Message) -> bool:
     if now - random_reply_last.get(key, 0) < RANDOM_REPLY_COOLDOWN:
         return False
 
-    if random.random() < RANDOM_REPLY_CHANCE:
+    if random.random() < guild_random_chance:
         random_reply_last[key] = now
         return True
 
@@ -925,6 +1010,14 @@ async def ai(
             save_memory()
             return reply, None, None
 
+        now = time.time()
+        last_user_request = user_ai_last.get(uid, 0)
+        wait_left = USER_AI_COOLDOWN - (now - last_user_request)
+        if wait_left > 0:
+            return f"**Подожди {wait_left:.1f} сек. перед следующим запросом.**", None, None
+        user_ai_last[uid] = now
+        inc_stat("ai_requests")
+
         # Slice recent messages for context; older context is stored in conversation_summaries.
         context = histories[uid][-MAX_RECENT_MESSAGES:]
 
@@ -949,12 +1042,18 @@ async def ai(
         return reply, image_url, image_bytes
 
     except MistralRateLimitError as e:
+        inc_stat("errors")
         wait_text = f" Попробуй через {e.retry_after} сек." if e.retry_after else " Попробуй чуть позже."
         print(f"Ошибка в ai(): Mistral rate limit, retry_after={e.retry_after}")
+        if guild_id:
+            await log_event(guild_id, f"Mistral rate limit. Retry after {e.retry_after}s")
         return f"**Сейчас лимит Mistral.{wait_text}**", None, None
 
     except Exception as e:
+        inc_stat("errors")
         print(f"Ошибка в ai(): {e}")
+        if guild_id:
+            await log_event(guild_id, f"AI error: {e}")
         return "**Произошла ошибка при ответе. Попробуй чуть позже.**", None, None
 
 
@@ -1042,6 +1141,26 @@ async def send_v2(
             print(f"Discord ошибка: {data}")
             raise RuntimeError(str(data))
         return int(data["id"])
+
+
+async def log_event(guild_id: int | None, text: str):
+    """Send bot errors/events to configured log channel, if set."""
+    channel_id = None
+    if guild_id:
+        channel_id = get_guild_setting(guild_id, "log_channel_id", None)
+    if not channel_id:
+        channel_id = LOG_CHANNEL_ID or None
+    if not channel_id:
+        return
+
+    try:
+        channel = client.get_channel(int(channel_id))
+        if channel is None:
+            channel = await client.fetch_channel(int(channel_id))
+        safe_text = str(text).replace("`", "'")[:1800]
+        await channel.send(f"**Miko log**\n```text\n{safe_text}\n```", allowed_mentions=discord.AllowedMentions.none())
+    except Exception as e:
+        print(f"[LogChannel] Failed: {e}")
 
 
 async def send_error_v2(channel_id: int, text: str, reply_to: int = None):
@@ -1322,11 +1441,116 @@ async def setchannel(interaction: discord.Interaction):
     )
 
 
+
+def user_memory_text(uid: int) -> str:
+    facts = [f for f in user_memories.get(uid, []) if f]
+    summary = conversation_summaries.get(uid, "").strip()
+    lines = []
+    if facts:
+        lines.append("**Факты:**")
+        for i, fact in enumerate(facts[-MAX_MEMORY_FACTS:], 1):
+            lines.append(f"{i}. {fact}")
+    if summary:
+        lines.append("\n**Сводка диалога:**")
+        lines.append(summary[:1500])
+    return "\n".join(lines) if lines else "Память пока пустая."
+
+
+@tree.command(name="memory", description="Показать, что Miko помнит о тебе")
+async def memory_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(user_memory_text(interaction.user.id)[:1900], ephemeral=True)
+
+
+@tree.command(name="forget", description="Очистить память Miko о тебе")
+@app_commands.describe(all_memory="Если True — удалить факты, сводку и историю. Если False — только текущий диалог")
+async def forget_cmd(interaction: discord.Interaction, all_memory: bool = False):
+    uid = interaction.user.id
+    histories.pop(uid, None)
+    if all_memory:
+        user_memories.pop(uid, None)
+        conversation_summaries.pop(uid, None)
+        text = "**Вся память о тебе очищена.**"
+    else:
+        text = "**Текущий контекст диалога очищен. Долгая память осталась.**"
+    save_memory()
+    await interaction.response.send_message(text, ephemeral=True)
+
+
+@tree.command(name="reset", description="Сбросить текущий контекст диалога без удаления долгой памяти")
+async def reset_cmd(interaction: discord.Interaction):
+    histories[interaction.user.id] = []
+    save_memory()
+    await interaction.response.send_message("**Текущий контекст очищен.**", ephemeral=True)
+
+
+@tree.command(name="randomchat", description="Включить/выключить рандомные ответы Miko в этом сервере (admin)")
+@app_commands.describe(enabled="True — включить, False — выключить")
+async def randomchat_cmd(interaction: discord.Interaction, enabled: bool):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True)
+        return
+    set_guild_setting(interaction.guild_id, "random_chat_enabled", bool(enabled))
+    state = "включены" if enabled else "выключены"
+    await interaction.response.send_message(f"<:checkmark:1504023759101886607> **Рандомные ответы {state}.**", ephemeral=True)
+
+
+@tree.command(name="chance", description="Поставить шанс рандомного ответа Miko в процентах (admin)")
+@app_commands.describe(percent="Например 1 = 1%, 0 = выключить случайные ответы")
+async def chance_cmd(interaction: discord.Interaction, percent: float):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True)
+        return
+    percent = max(0.0, min(100.0, float(percent)))
+    set_guild_setting(interaction.guild_id, "random_reply_chance", percent / 100.0)
+    if percent == 0:
+        set_guild_setting(interaction.guild_id, "random_chat_enabled", False)
+    await interaction.response.send_message(
+        f"<:checkmark:1504023759101886607> **Шанс рандомного ответа: {percent:.1f}%.**",
+        ephemeral=True
+    )
+
+
+@tree.command(name="logchannel", description="Назначить/убрать текущий канал для логов Miko (admin)")
+@app_commands.describe(enabled="True — назначить текущий канал, False — убрать лог-канал")
+async def logchannel_cmd(interaction: discord.Interaction, enabled: bool):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("<:cross:1504024178494410865> **У тебя нет прав.**", ephemeral=True)
+        return
+    if enabled:
+        set_guild_setting(interaction.guild_id, "log_channel_id", int(interaction.channel_id))
+        await interaction.response.send_message("<:checkmark:1504023759101886607> **Этот канал назначен для логов.**", ephemeral=True)
+        await log_event(interaction.guild_id, f"Log channel set by {interaction.user} in #{getattr(interaction.channel, 'name', interaction.channel_id)}")
+    else:
+        guild_settings.setdefault(int(interaction.guild_id), {}).pop("log_channel_id", None)
+        save_memory()
+        await interaction.response.send_message("<:checkmark:1504023759101886607> **Лог-канал убран.**", ephemeral=True)
+
+
+@tree.command(name="botstatus", description="Показать технический статус Miko")
+async def botstatus_cmd(interaction: discord.Interaction):
+    payload = build_status_payload()
+    guild_random_enabled = get_guild_setting(interaction.guild_id, "random_chat_enabled", RANDOM_CHAT_ENABLED)
+    guild_random_chance = get_guild_setting(interaction.guild_id, "random_reply_chance", RANDOM_REPLY_CHANCE)
+    text = (
+        f"**Статус:** {payload['status']}\n"
+        f"**Аптайм:** {format_uptime(payload['uptime_seconds'])}\n"
+        f"**Пинг:** {payload.get('latency_ms') or '—'} мс\n"
+        f"**Модель:** {payload['model']}\n"
+        f"**Память:** {payload['db_backend']}\n"
+        f"**Рандом-ответы сервера:** {'вкл' if guild_random_enabled else 'выкл'} / {float(guild_random_chance) * 100:.1f}%\n"
+        f"**AI запросов:** {bot_stats.get('ai_requests', 0)}\n"
+        f"**Ошибок:** {bot_stats.get('errors', 0)}\n"
+        f"**Rate limits:** {bot_stats.get('rate_limits', 0)}"
+    )
+    await interaction.response.send_message(text, ephemeral=True)
+
+
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    inc_stat("messages_seen")
     remember_server_message(message)
     if message.guild:
         maybe_save_server_context()
@@ -1346,9 +1570,12 @@ async def on_message(message: discord.Message):
             save_memory()
         else:
             try:
-                await reply_in_public_chat(message)
+                if await reply_in_public_chat(message):
+                    inc_stat("public_replies")
             except Exception as e:
+                inc_stat("errors")
                 print(f"Ошибка публичного ответа: {e}")
+                await log_event(message.guild.id if message.guild else None, f"Public reply error: {e}")
             return
 
     display_name = message.author.display_name
@@ -1373,8 +1600,11 @@ async def on_message(message: discord.Message):
                 image_url=image_url,
                 image_bytes=image_bytes
             )
+            inc_stat("private_replies")
         except Exception as e:
+            inc_stat("errors")
             print(f"Ошибка отправки: {e}")
+            await log_event(message.guild.id if message.guild else None, f"Send error: {e}")
 
 
 def format_uptime(seconds: float) -> str:
@@ -1411,6 +1641,10 @@ def build_status_payload() -> dict:
         "db_backend": selected_db_backend(),
         "random_chat_enabled": RANDOM_CHAT_ENABLED,
         "random_reply_chance": RANDOM_REPLY_CHANCE,
+        "stats": bot_stats,
+        "configured_guilds": len(guild_settings),
+        "memory_users": len(user_memories),
+        "active_dialogs": len(user_thread),
     }
 
 
@@ -1503,6 +1737,9 @@ async def on_ready():
         await tree.sync(guild=guild)
     await tree.sync()
     print(f"Запущен: {client.user}", flush=True)
+    await log_event(None, f"Bot started: {client.user}")
+    for guild_id in list(guild_settings.keys()):
+        await log_event(guild_id, f"Bot started: {client.user}")
 
 
 async def main():

@@ -663,6 +663,10 @@
           <div class="endpoint"><span>Health check</span><code>/healthz</code></div>
           <div class="endpoint"><span>JSON status</span><code>/status.json</code></div>
           <div class="endpoint"><span>Главная</span><code>/</code></div>
+          <div class="endpoint"><span>Сообщений</span><code id="statMessages">—</code></div>
+          <div class="endpoint"><span>AI запросов</span><code id="statAi">—</code></div>
+          <div class="endpoint"><span>Публичных ответов</span><code id="statPublic">—</code></div>
+          <div class="endpoint"><span>Ошибок</span><code id="statErrors">—</code></div>
         </div>
         <div class="stack">
           <span>Discord.py</span>
@@ -720,6 +724,11 @@
       setText('configModel', data.model || '—');
       setText('configDb', data.db_backend || '—');
       setText('configRandom', randomText);
+      const stats = data.stats || {};
+      setText('statMessages', stats.messages_seen ?? 0);
+      setText('statAi', stats.ai_requests ?? 0);
+      setText('statPublic', stats.public_replies ?? 0);
+      setText('statErrors', stats.errors ?? 0);
       setText('updated', new Date().toLocaleTimeString('ru-RU'));
     }
 
@@ -750,5 +759,5 @@
     refreshStatus();
     setInterval(refreshStatus, 15000);
   </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a192a9371b41c2e8',t:'MTc4MzcxODkzNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a192cfac78c4c2ac',t:'MTc4MzcyMDUxMQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>

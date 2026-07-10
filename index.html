@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <title>Miko Status</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #000000;
+      --bg2: #02030a;
+      --card: rgba(5, 7, 16, 0.92);
+      --card2: rgba(8, 11, 22, 0.86);
+      --line: rgba(255, 255, 255, 0.09);
+      --line2: rgba(139, 92, 246, 0.28);
+      --text: #f4f7ff;
+      --muted: #788398;
+      --soft: #aab5c8;
+      --violet: #8b5cf6;
+      --cyan: #22d3ee;
+      --green: #22c55e;
+      --red: #fb7185;
+      --shadow: 0 30px 90px rgba(0, 0, 0, 0.85);
+      --radius: 30px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 50% -20%, rgba(139, 92, 246, 0.16), transparent 34rem),
+        radial-gradient(circle at 100% 20%, rgba(34, 211, 238, 0.07), transparent 30rem),
+        linear-gradient(180deg, #000 0%, #02030a 58%, #000 100%);
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -5;
+      opacity: 0.22;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+      background-size: 70px 70px;
+      mask-image: radial-gradient(circle at 50% 20%, black, transparent 74%);
+    }
+
+    .scanline {
+      position: fixed;
+      inset: 0;
+      z-index: -4;
+      pointer-events: none;
+      opacity: 0.065;
+      background: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(255,255,255,.45) 4px 4px);
+      animation: scan 8s linear infinite;
+    }
+
+    @keyframes scan {
+      from { transform: translateY(-40px); }
+      to { transform: translateY(40px); }
+    }
+
+    .noise {
+      position: fixed;
+      inset: 0;
+      z-index: -3;
+      opacity: .07;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='.75'/%3E%3C/svg%3E");
+    }
+
+    .glow {
+      position: fixed;
+      z-index: -2;
+      width: 28rem;
+      height: 28rem;
+      border-radius: 999px;
+      filter: blur(70px);
+      opacity: .12;
+      pointer-events: none;
+      animation: float 12s ease-in-out infinite alternate;
+    }
+    .glow.a { left: -14rem; top: 8rem; background: var(--violet); }
+    .glow.b { right: -16rem; bottom: -10rem; background: var(--cyan); animation-delay: -5s; }
+
+    @keyframes float {
+      from { transform: translate3d(0, 0, 0) scale(1); }
+      to { transform: translate3d(38px, -32px, 0) scale(1.06); }
+    }
+
+    .shell {
+      position: relative;
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 30px 20px 46px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+      animation: navIn .7s cubic-bezier(.2,.8,.2,1) both;
+    }
+
+    @keyframes navIn {
+      from { opacity: 0; transform: translateY(-14px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-width: 0;
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      font-weight: 950;
+      letter-spacing: -.05em;
+      background: linear-gradient(145deg, #1f2937, #111827 45%, #3b0764);
+      border: 1px solid rgba(255,255,255,.12);
+      box-shadow: 0 0 42px rgba(139,92,246,.24), inset 0 1px 0 rgba(255,255,255,.12);
+    }
+
+    .brand-title b {
+      display: block;
+      font-size: 19px;
+      line-height: 1.05;
+      letter-spacing: -.045em;
+    }
+
+    .brand-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip, .btn {
+      color: var(--soft);
+      border: 1px solid var(--line);
+      background: rgba(4, 7, 15, .82);
+      border-radius: 999px;
+      padding: 10px 13px;
+      font-size: 13px;
+      text-decoration: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+    }
+
+    .btn { transition: .18s ease; }
+    .btn:hover { transform: translateY(-1px); border-color: rgba(139,92,246,.55); color: #fff; }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(139,92,246,.10), transparent 30%),
+        linear-gradient(180deg, var(--card), rgba(2,3,9,.96));
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.06);
+      animation: heroIn .8s cubic-bezier(.2,.8,.2,1) both;
+    }
+
+    @keyframes heroIn {
+      from { opacity: 0; transform: translateY(24px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.055), transparent);
+      transform: translateX(-120%);
+      animation: shine 7s ease-in-out infinite;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: calc(var(--radius) - 1px);
+      pointer-events: none;
+      background: radial-gradient(circle at 72% 10%, rgba(34,211,238,.085), transparent 20rem);
+    }
+
+    @keyframes shine {
+      0%, 38% { transform: translateX(-120%); }
+      66%, 100% { transform: translateX(120%); }
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 2;
+      padding: clamp(28px, 5.5vw, 64px);
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(310px, .92fr);
+      gap: 30px;
+      align-items: center;
+    }
+
+    .badge {
+      width: fit-content;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 13px;
+      border-radius: 999px;
+      color: #a7f3d0;
+      font-size: 13px;
+      font-weight: 850;
+      border: 1px solid rgba(34,197,94,.28);
+      background: rgba(34,197,94,.075);
+      box-shadow: 0 0 30px rgba(34,197,94,.06);
+      margin-bottom: 20px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--green);
+      box-shadow: 0 0 22px rgba(34,197,94,.85);
+      animation: pulse 1.7s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(34,197,94,.65), 0 0 22px rgba(34,197,94,.7); }
+      70% { box-shadow: 0 0 0 11px rgba(34,197,94,0), 0 0 22px rgba(34,197,94,.7); }
+      100% { box-shadow: 0 0 0 0 rgba(34,197,94,0), 0 0 22px rgba(34,197,94,.7); }
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(44px, 7.2vw, 92px);
+      line-height: .88;
+      letter-spacing: -.085em;
+    }
+
+    .grad {
+      color: transparent;
+      background: linear-gradient(90deg, #fff 0%, #c7d2fe 45%, #67e8f9 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      filter: drop-shadow(0 0 30px rgba(139,92,246,.18));
+    }
+
+    .lead {
+      max-width: 680px;
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: clamp(15px, 1.8vw, 18px);
+      line-height: 1.75;
+    }
+
+    .terminal {
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,.105);
+      background: rgba(0,0,0,.42);
+      overflow: hidden;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 24px 70px rgba(0,0,0,.30);
+    }
+
+    .terminal-top {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      border-bottom: 1px solid rgba(255,255,255,.085);
+      background: rgba(255,255,255,.025);
+    }
+
+    .circle { width: 10px; height: 10px; border-radius: 50%; background: #475569; }
+    .circle.red { background: #fb7185; }
+    .circle.yellow { background: #fbbf24; }
+    .circle.green { background: #22c55e; }
+
+    .terminal-body { padding: 18px; }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(255,255,255,.075);
+    }
+    .row:last-child { border-bottom: 0; }
+    .key { color: var(--muted); font-size: 13px; }
+    .val { font-weight: 850; text-align: right; overflow-wrap: anywhere; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .metric {
+      min-height: 138px;
+      position: relative;
+      overflow: hidden;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.038), rgba(255,255,255,.016)),
+        rgba(3, 5, 12, .92);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 18px 55px rgba(0,0,0,.34);
+      padding: 20px;
+      animation: cardIn .8s cubic-bezier(.2,.8,.2,1) both;
+    }
+
+    .metric:nth-child(1) { animation-delay: .08s; }
+    .metric:nth-child(2) { animation-delay: .12s; }
+    .metric:nth-child(3) { animation-delay: .16s; }
+    .metric:nth-child(4) { animation-delay: .20s; }
+    .metric:nth-child(5) { animation-delay: .24s; }
+    .metric:nth-child(6) { animation-delay: .28s; }
+    .metric:nth-child(7) { animation-delay: .32s; }
+
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at top right, rgba(139,92,246,.10), transparent 12rem);
+      pointer-events: none;
+    }
+
+    .metric::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -40%;
+      width: 40%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.42), transparent);
+      animation: lineMove 4.5s ease-in-out infinite;
+    }
+
+    @keyframes lineMove {
+      0%, 25% { transform: translateX(0); opacity: 0; }
+      45% { opacity: 1; }
+      75%, 100% { transform: translateX(360%); opacity: 0; }
+    }
+
+    .label, .value, .hint { position: relative; z-index: 1; }
+    .label { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    .value { font-size: clamp(25px, 3vw, 36px); font-weight: 950; letter-spacing: -.055em; overflow-wrap: anywhere; }
+    .hint { color: #64748b; font-size: 12px; margin-top: 9px; }
+    .wide { grid-column: span 2; }
+
+    .footer {
+      margin-top: 16px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: rgba(3,5,12,.86);
+      padding: 16px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .footer-links { display: flex; gap: 10px; flex-wrap: wrap; }
+    .footer a {
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      padding: 9px 12px;
+      background: rgba(255,255,255,.035);
+      transition: .18s ease;
+    }
+    .footer a:hover { border-color: rgba(139,92,246,.55); background: rgba(139,92,246,.10); }
+
+    @media (max-width: 900px) {
+      .hero-inner { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 560px) {
+      .shell { padding: 20px 14px 28px; }
+      .nav { align-items: flex-start; }
+      .brand-title span { display: none; }
+      .hero-inner { padding: 24px; }
+      .grid { grid-template-columns: 1fr; }
+      .wide { grid-column: span 1; }
+      h1 { font-size: clamp(42px, 15vw, 62px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="scanline"></div>
+  <div class="noise"></div>
+  <div class="glow a"></div>
+  <div class="glow b"></div>
+
+  <script id="initial-status" type="application/json">{{STATUS_DATA}}</script>
+
+  <main class="shell">
+    <nav class="nav">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div class="brand-title">
+          <b>Miko Status</b>
+          <span>Discord AI bot dashboard</span>
+        </div>
+      </div>
+      <div class="actions">
+        <span class="chip">Render Web Service</span>
+        <a class="btn" href="/status.json">JSON</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <div class="badge"><span class="dot"></span><span id="statusTop">{{STATUS_RU}}</span></div>
+          <h1><span class="grad">Miko Bot</span><br>is online</h1>
+          <p class="lead">
+            Максимально тёмная статус-страница для Discord-бота. Здесь видно состояние сервиса,
+            аптайм, пинг, модель и backend памяти. Без токенов, ключей и лишних данных.
+          </p>
+        </div>
+
+        <aside class="terminal">
+          <div class="terminal-top">
+            <span class="circle red"></span>
+            <span class="circle yellow"></span>
+            <span class="circle green"></span>
+          </div>
+          <div class="terminal-body">
+            <div class="row"><span class="key">Статус</span><span class="val" id="statusBox">{{STATUS_RU}}</span></div>
+            <div class="row"><span class="key">Бот</span><span class="val" id="botName">{{BOT_NAME}}</span></div>
+            <div class="row"><span class="key">Старт</span><span class="val" id="startedAt">{{STARTED_AT}}</span></div>
+            <div class="row"><span class="key">Health</span><span class="val">/healthz</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="metric">
+        <div class="label">Серверов</div>
+        <div class="value" id="guilds">{{GUILD_COUNT}}</div>
+        <div class="hint">Discord guilds</div>
+      </div>
+      <div class="metric">
+        <div class="label">Пользователей</div>
+        <div class="value" id="users">{{USER_COUNT}}</div>
+        <div class="hint">примерно по серверам</div>
+      </div>
+      <div class="metric">
+        <div class="label">Аптайм</div>
+        <div class="value" id="uptime">{{UPTIME}}</div>
+        <div class="hint">с момента запуска</div>
+      </div>
+      <div class="metric">
+        <div class="label">Пинг Discord</div>
+        <div class="value" id="latency">{{LATENCY}}</div>
+        <div class="hint">websocket latency</div>
+      </div>
+      <div class="metric wide">
+        <div class="label">Модель</div>
+        <div class="value" id="model">{{MODEL}}</div>
+        <div class="hint">меняется через MISTRAL_MODEL</div>
+      </div>
+      <div class="metric">
+        <div class="label">Память</div>
+        <div class="value" id="db">{{DB_BACKEND}}</div>
+        <div class="hint">storage backend</div>
+      </div>
+      <div class="metric">
+        <div class="label">Рандом-ответы</div>
+        <div class="value" id="random">{{RANDOM_CHANCE}}</div>
+        <div class="hint">шанс ответа в чате</div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <div>Автообновление каждые 15 секунд. Последнее обновление: <span id="updated">при загрузке</span></div>
+      <div class="footer-links">
+        <a href="/healthz">Health</a>
+        <a href="/status.json">Status JSON</a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function formatUptime(seconds) {
+      seconds = Math.max(0, Math.floor(seconds || 0));
+      const days = Math.floor(seconds / 86400); seconds %= 86400;
+      const hours = Math.floor(seconds / 3600); seconds %= 3600;
+      const minutes = Math.floor(seconds / 60); seconds %= 60;
+      const parts = [];
+      if (days) parts.push(days + 'д');
+      if (hours || days) parts.push(hours + 'ч');
+      if (minutes || hours || days) parts.push(minutes + 'м');
+      parts.push(seconds + 'с');
+      return parts.join(' ');
+    }
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value ?? '—';
+    }
+
+    function applyStatus(data) {
+      if (!data) return;
+      const statusRu = data.status === 'online' ? 'Онлайн' : 'Запускается';
+      setText('statusTop', statusRu);
+      setText('statusBox', statusRu);
+      setText('botName', data.bot || 'Miko');
+      setText('startedAt', data.started_at || '—');
+      setText('guilds', data.guilds ?? '—');
+      setText('users', data.users ?? '—');
+      setText('uptime', formatUptime(data.uptime_seconds));
+      setText('latency', data.latency_ms ? Math.round(data.latency_ms) + ' мс' : '—');
+      setText('model', data.model || '—');
+      setText('db', data.db_backend || '—');
+      setText('random', data.random_chat_enabled ? ((data.random_reply_chance || 0) * 100).toFixed(1) + '%' : 'выключено');
+      setText('updated', new Date().toLocaleTimeString('ru-RU'));
+    }
+
+    function readInitialStatus() {
+      try {
+        const el = document.getElementById('initial-status');
+        if (!el) return null;
+        const raw = el.textContent.trim();
+        if (!raw || raw.startsWith('{{')) return null;
+        return JSON.parse(raw);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const response = await fetch('/status.json', { cache: 'no-store' });
+        if (!response.ok) throw new Error('bad status');
+        applyStatus(await response.json());
+      } catch (_) {
+        // Если JSON временно недоступен, оставляем серверно отрендеренные значения.
+        setText('updated', 'JSON недоступен');
+      }
+    }
+
+    applyStatus(readInitialStatus());
+    refreshStatus();
+    setInterval(refreshStatus, 15000);
+  </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1928da0b94611d5',t:'MTc4MzcxNzgwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

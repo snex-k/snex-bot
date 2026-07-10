@@ -942,7 +942,7 @@ async def ai(
     except MistralRateLimitError as e:
         wait_text = f" Попробуй через {e.retry_after} сек." if e.retry_after else " Попробуй чуть позже."
         print(f"Ошибка в ai(): Mistral rate limit, retry_after={e.retry_after}")
-        return f"**Сейчас лимит Mistral.{wait_text}**", None, None
+        return f"**Сейчас лимит Mistral <:mistral_ai:1524942153128874044>: {wait_text}**", None, None
 
     except Exception as e:
         print(f"Ошибка в ai(): {e}")

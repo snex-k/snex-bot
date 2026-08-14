@@ -1,4 +1,6 @@
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{ConnectOptions, PgPool};
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -18,14 +20,21 @@ pub struct Database {
 
 impl Database {
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
+        // Supabase connection pooler (порт 6543, Transaction mode) не
+        // поддерживает protocol-level prepared statements между разными
+        // соединениями пула — отключаем statement caching в sqlx,
+        // иначе получаем ошибку "prepared statement already exists".
+        let options = PgConnectOptions::from_str(database_url)?.statement_cache_capacity(0);
+
         let pool = PgPoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect_with(options)
             .await?;
 
         Ok(Self { pool })
     }
 
+    /// Сохраняет сообщение в историю канала (используется для контекста диалога).
     pub async fn save_message(
         &self,
         channel_id: &str,
@@ -47,8 +56,9 @@ impl Database {
         Ok(())
     }
 
-
-  pub async fn recent_messages(
+    /// Возвращает последние N сообщений канала в хронологическом порядке
+    /// (старые → новые), для использования как контекст диалога.
+    pub async fn recent_messages(
         &self,
         channel_id: &str,
         limit: i64,
@@ -74,6 +84,7 @@ impl Database {
             .collect())
     }
 
+    /// Сохраняет новый факт о пользователе.
     pub async fn save_fact(&self, user_id: &str, fact: &str) -> anyhow::Result<()> {
         sqlx::query("insert into user_facts (user_id, fact) values ($1, $2)")
             .bind(user_id)
@@ -84,6 +95,7 @@ impl Database {
         Ok(())
     }
 
+    /// Возвращает известные факты о пользователе (последние N).
     pub async fn user_facts(&self, user_id: &str, limit: i64) -> anyhow::Result<Vec<UserFact>> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "select fact from user_facts \

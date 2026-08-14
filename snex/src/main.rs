@@ -1,4 +1,5 @@
 mod ai;
+mod commands;
 mod config;
 mod db;
 mod discord;
@@ -13,6 +14,9 @@ use config::Config;
 use db::Database;
 use discord::handler::Handler;
 
+/// Render (free Web Service) требует открытый порт, иначе убивает процесс
+/// по таймауту. Боту порт не нужен, поэтому поднимаем фиктивный сервер,
+/// который просто отвечает "ok" на любой запрос.
 async fn run_dummy_server() {
     let port = std::env::var("PORT").unwrap_or_else(|_| "10000".to_string());
     let app = Router::new().route("/", get(|| async { "ok" }));
@@ -53,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Snex запускается...");
 
-
+    // Discord-бот и фиктивный HTTP-сервер работают параллельно.
     tokio::select! {
         result = client.start() => {
             if let Err(err) = result {

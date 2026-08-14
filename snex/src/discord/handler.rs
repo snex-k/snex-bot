@@ -7,7 +7,7 @@ use crate::ai::groq::GroqClient;
 use crate::ai::prompt::build_context_message;
 use crate::config::Config;
 use crate::db::Database;
-use crate::discord::error_message::send_error_embed;
+use crate::discord::error::send_error;
 use crate::discord::responder::parse_response;
 
 const HISTORY_LIMIT: i64 = 15;
@@ -38,8 +38,7 @@ impl EventHandler for Handler {
         {
             tracing::error!("не удалось сохранить сообщение: {err}");
         }
-
-
+        
         let bot_id = ctx.cache.current_user().id;
         let is_mentioned = msg.mentions_user_id(bot_id);
 
@@ -49,7 +48,6 @@ impl EventHandler for Handler {
                 return;
             }
         }
-
 
         let history = self
             .db
@@ -69,7 +67,7 @@ impl EventHandler for Handler {
             Ok(reply) => reply,
             Err(err) => {
                 tracing::error!("Groq API ошибка: {err}");
-                send_error_embed(&ctx, msg.channel_id, "Не смог получить ответ от ИИ").await;
+                send_error(&ctx, msg.channel_id, "не смог получить ответ от ИИ").await;
                 return;
             }
         };
@@ -79,7 +77,7 @@ impl EventHandler for Handler {
         if !parsed.text.is_empty() {
             if let Err(err) = msg.channel_id.say(&ctx.http, &parsed.text).await {
                 tracing::error!("не удалось отправить сообщение: {err}");
-                send_error_embed(&ctx, msg.channel_id, "Не удалось отправить сообщение").await;
+                send_error(&ctx, msg.channel_id, "не удалось отправить сообщение").await;
             }
         }
 
@@ -89,7 +87,6 @@ impl EventHandler for Handler {
             }
         }
 
-      
         match self.groq.extract_fact(&msg.content).await {
             Ok(Some(fact)) => {
                 if let Err(err) = self.db.save_fact(&author_id, &fact).await {

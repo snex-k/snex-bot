@@ -1,3 +1,3 @@
-pub mod error_message;
+pub mod error;
 pub mod handler;
 pub mod responder;

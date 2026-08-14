@@ -1,10 +1,16 @@
 use rand::Rng;
 use serenity::async_trait;
+use serenity::builder::CreateCommand;
+use serenity::model::application::Interaction;
 use serenity::model::channel::Message;
+use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 
 use crate::ai::groq::GroqClient;
 use crate::ai::prompt::build_context_message;
+use crate::commands::namestyle::{
+    build_namestyle_panel, handle_namestyle_component, handle_namestyle_modal,
+};
 use crate::config::Config;
 use crate::db::Database;
 use crate::discord::error::send_error;
@@ -22,6 +28,48 @@ pub struct Handler {
 
 #[async_trait]
 impl EventHandler for Handler {
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        tracing::info!("{} на связи", ready.user.name);
+
+        for guild in &ready.guilds {
+            let command = CreateCommand::new("namestyle")
+                .description("Настроить стиль ника бота на этом сервере");
+            if let Err(err) = guild.id.create_command(&ctx.http, command).await {
+                tracing::error!("не удалось зарегистрировать /namestyle на {}: {err}", guild.id);
+            }
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        match interaction {
+            Interaction::Command(cmd) if cmd.data.name == "namestyle" => {
+                let response = serenity::builder::CreateInteractionResponseMessage::new()
+                    .components(build_namestyle_panel())
+                    .ephemeral(true);
+                if let Err(err) = cmd
+                    .create_response(
+                        &ctx.http,
+                        serenity::builder::CreateInteractionResponse::Message(response),
+                    )
+                    .await
+                {
+                    tracing::error!("не удалось открыть панель /namestyle: {err}");
+                }
+            }
+            Interaction::Component(component) => {
+                if let Err(err) = handle_namestyle_component(&ctx.http, &component).await {
+                    tracing::error!("ошибка обработки компонента namestyle: {err}");
+                }
+            }
+            Interaction::Modal(modal) => {
+                if let Err(err) = handle_namestyle_modal(&ctx.http, &modal).await {
+                    tracing::error!("ошибка обработки модалки namestyle: {err}");
+                }
+            }
+            _ => {}
+        }
+    }
+
     async fn message(&self, ctx: Context, msg: Message) {
         if msg.author.bot {
             return;
@@ -31,6 +79,7 @@ impl EventHandler for Handler {
         let author_id = msg.author.id.to_string();
         let author_name = msg.author.name.clone();
 
+
         if let Err(err) = self
             .db
             .save_message(&channel_id, &author_id, &author_name, &msg.content)
@@ -38,7 +87,7 @@ impl EventHandler for Handler {
         {
             tracing::error!("не удалось сохранить сообщение: {err}");
         }
-        
+
         let bot_id = ctx.cache.current_user().id;
         let is_mentioned = msg.mentions_user_id(bot_id);
 
@@ -49,6 +98,8 @@ impl EventHandler for Handler {
             }
         }
 
+        // Подтягиваем историю канала и известные факты о человеке,
+        // чтобы модель понимала контекст, а не отвечала в вакууме.
         let history = self
             .db
             .recent_messages(&channel_id, HISTORY_LIMIT)
@@ -86,6 +137,7 @@ impl EventHandler for Handler {
                 tracing::error!("не удалось отправить гифку: {err}");
             }
         }
+
 
         match self.groq.extract_fact(&msg.content).await {
             Ok(Some(fact)) => {

@@ -43,8 +43,6 @@ impl GroqClient {
         }
     }
 
-    /// Отправляет system prompt + сообщение пользователя, возвращает
-    /// сырой текст ответа модели (с тегами [emoji:...]/[gif:...] внутри).
     pub async fn ask(&self, system_prompt: &str, user_message: &str) -> anyhow::Result<String> {
         let body = ChatRequest {
             model: MODEL.to_string(),
@@ -79,5 +77,22 @@ impl GroqClient {
             .unwrap_or_default();
 
         Ok(text)
+    }
+
+    pub async fn extract_fact(&self, message: &str) -> anyhow::Result<Option<String>> {
+        let system_prompt = "Ты анализируешь сообщение пользователя из чата. \
+            Если в нём есть конкретный факт о человеке, стоящий запоминания \
+            (имя, увлечение, профессия, место жительства, предпочтение и т.п.) — \
+            выведи его одной короткой фразой на русском, без пояснений. \
+            Если ничего примечательного нет — выведи ровно слово NONE.";
+
+        let raw = self.ask(system_prompt, message).await?;
+        let trimmed = raw.trim();
+
+        if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(trimmed.to_string()))
+        }
     }
 }

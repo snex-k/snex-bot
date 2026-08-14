@@ -1,0 +1,8 @@
+[emoji]
+surprised = "<:surprised:PUT_ID_HERE>"
+funny = "<:lol:PUT_ID_HERE>"
+sad = "<:sad:PUT_ID_HERE>"
+
+[gifs]
+excited = "https://tenor.com/view/example-excited"
+confused = "https://tenor.com/view/example-confused"

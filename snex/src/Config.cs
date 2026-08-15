@@ -16,6 +16,7 @@ public class Config
     public required string Personality { get; init; }
     public required EmojiConfig Emojis { get; init; }
     public double RandomReplyChance { get; init; } = 0.15;
+    public required string DatabaseUrl { get; init; }
 
     public static Config Load()
     {
@@ -34,6 +35,9 @@ public class Config
         var chanceRaw = Environment.GetEnvironmentVariable("RANDOM_REPLY_CHANCE");
         var chance = double.TryParse(chanceRaw, out var parsed) ? parsed : 0.15;
 
+        var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL")
+            ?? throw new InvalidOperationException("DATABASE_URL не найден в .env");
+
         return new Config
         {
             DiscordToken = discordToken,
@@ -41,6 +45,7 @@ public class Config
             Personality = personality,
             Emojis = emojis,
             RandomReplyChance = chance,
+            DatabaseUrl = databaseUrl,
         };
     }
 

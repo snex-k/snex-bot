@@ -16,10 +16,21 @@ public class Database
 
     public static Database Connect(string databaseUrl)
     {
-        var builder = new NpgsqlConnectionStringBuilder(databaseUrl)
+        var uri = new Uri(databaseUrl);
+        var userInfo = uri.UserInfo.Split(':', 2);
+
+        var builder = new NpgsqlConnectionStringBuilder
         {
+            Host = uri.Host,
+            Port = uri.Port > 0 ? uri.Port : 5432,
+            Username = Uri.UnescapeDataString(userInfo[0]),
+            Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
+            Database = uri.AbsolutePath.TrimStart('/'),
+            SslMode = SslMode.Require,
+            TrustServerCertificate = true,
             MaxAutoPrepare = 0,
         };
+
         return new Database(builder.ConnectionString);
     }
 

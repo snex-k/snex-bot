@@ -2,6 +2,11 @@ using Microsoft.Extensions.Hosting;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
+using NetCord.Hosting.Services;
+using NetCord.Hosting.Services.ApplicationCommands;
+using NetCord.Hosting.Services.ComponentInteractions;
+using NetCord.Services.ApplicationCommands;
+using NetCord.Services.ComponentInteractions;
 
 namespace Snex;
 
@@ -32,6 +37,12 @@ public class Program
                 | GatewayIntents.Guilds;
         });
 
+        builder.Services
+            .AddApplicationCommands<ApplicationCommandInteraction, ApplicationCommandContext>()
+            .AddComponentInteractions<StringMenuInteraction, StringMenuInteractionContext>()
+            .AddComponentInteractions<ButtonInteraction, ButtonInteractionContext>()
+            .AddComponentInteractions<ModalInteraction, ModalInteractionContext>();
+
         // Render (free Web Service) требует открытый порт, иначе убивает
         // процесс по таймауту. Боту порт не нужен, поэтому поднимаем
         // минимальный endpoint, который просто отвечает "ok".
@@ -43,6 +54,19 @@ public class Program
 
         var client = app.Services.GetRequiredService<GatewayClient>();
         client.MessageCreate += async message => await messageHandler.HandleAsync(message, client);
+
+        app.AddModules(typeof(Program).Assembly);
+        app.UseGatewayEventHandlers();
+
+        // Регистрируем /namestyle и другие slash-команды в Discord.
+        // Глобальная регистрация может занять до часа на распространение,
+        // но для одного-двух серверов хобби-бота это не критично.
+        var commandService = app.Services.GetRequiredService<ApplicationCommandService<ApplicationCommandContext>>();
+        client.Ready += async _ =>
+        {
+            await commandService.RegisterCommandsAsync(client.Rest, client.Id);
+            Console.WriteLine("Slash-команды зарегистрированы");
+        };
 
         Console.WriteLine("Snex запускается...");
         await app.RunAsync();

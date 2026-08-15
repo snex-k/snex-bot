@@ -1,4 +1,4 @@
-sing Npgsql;
+using Npgsql;
 
 namespace Snex;
 

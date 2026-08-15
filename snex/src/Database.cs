@@ -27,8 +27,11 @@ public class Database
             Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
             Database = uri.AbsolutePath.TrimStart('/'),
             SslMode = SslMode.Require,
-            TrustServerCertificate = true,
             MaxAutoPrepare = 0,
+            MaxPoolSize = 5,
+            ConnectionIdleLifetime = 30,
+            Timeout = 15,
+            CommandTimeout = 15,
         };
 
         return new Database(builder.ConnectionString);

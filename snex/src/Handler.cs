@@ -25,7 +25,6 @@ public class Handler
 
     public async ValueTask HandleAsync(Message message, GatewayClient client)
     {
-        // Не отвечаем сами себе и другим ботам
         if (message.Author.IsBot)
         {
             return;
@@ -34,21 +33,7 @@ public class Handler
         var channelId = message.ChannelId.ToString();
         var authorId = message.Author.Id.ToString();
         var authorName = message.Author.Username;
-
-        // Сохраняем сообщение в историю канала независимо от того,
-        // ответит бот или нет — так собирается контекст на будущее.
-        try
-        {
-            await _db.SaveMessageAsync(channelId, authorId, authorName, message.Content);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"не удалось сохранить сообщение: {ex.Message}");
-        }
-
-        // На упоминание отвечаем всегда. Остальные сообщения —
-        // с рандомным шансом, чтобы бот иногда вклинивался в чат сам,
-        // но не отвечал на каждую реплику подряд.
+        var saveTask = TrySaveAsync(() => _db.SaveMessageAsync(channelId, authorId, authorName, message.Content));
         var isMentioned = message.MentionedUsers.Any(u => u.Id == client.Cache.User!.Id);
 
         if (!isMentioned)
@@ -56,14 +41,17 @@ public class Handler
             var roll = _random.NextDouble();
             if (roll > _config.RandomReplyChance)
             {
+                await saveTask;
                 return;
             }
         }
 
-        // Подтягиваем историю канала и известные факты о человеке,
-        // чтобы модель понимала контекст, а не отвечала в вакууме.
-        var history = await TryGetAsync(() => _db.RecentMessagesAsync(channelId, HistoryLimit), []);
-        var facts = await TryGetAsync(() => _db.UserFactsAsync(authorId, FactsLimit), []);
+        var historyTask = TryGetAsync(() => _db.RecentMessagesAsync(channelId, HistoryLimit), []);
+        var factsTask = TryGetAsync(() => _db.UserFactsAsync(authorId, FactsLimit), []);
+        await Task.WhenAll(saveTask, historyTask, factsTask);
+
+        var history = await historyTask;
+        var facts = await factsTask;
 
         var contextMessage = Prompt.BuildContextMessage(history, facts, authorName, message.Content);
 
@@ -112,19 +100,32 @@ public class Handler
             }
         }
 
-        // Отдельным запросом проверяем, не сказал ли человек что-то,
-        // что стоит запомнить на будущее (имя, увлечение и т.д.).
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var fact = await _groq.ExtractFactAsync(message.Content);
+                if (fact is not null)
+                {
+                    await _db.SaveFactAsync(authorId, fact);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ошибка при извлечении факта: {ex.Message}");
+            }
+        });
+    }
+
+    private static async Task TrySaveAsync(Func<Task> action)
+    {
         try
         {
-            var fact = await _groq.ExtractFactAsync(message.Content);
-            if (fact is not null)
-            {
-                await _db.SaveFactAsync(authorId, fact);
-            }
+            await action();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ошибка при извлечении факта: {ex.Message}");
+            Console.WriteLine($"не удалось сохранить сообщение: {ex.Message}");
         }
     }
 

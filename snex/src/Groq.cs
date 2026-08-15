@@ -16,9 +16,7 @@ public class Groq
         _http.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
     }
-
-    /// Отправляет system prompt + сообщение пользователя, возвращает
-    /// сырой текст ответа модели (с тегами [emoji:...]/[gif:...] внутри).
+    
     public async Task<string> AskAsync(string systemPrompt, string userMessage)
     {
         var request = new ChatRequest
@@ -36,6 +34,24 @@ public class Groq
 
         var result = await response.Content.ReadFromJsonAsync<ChatResponse>();
         return result?.Choices.FirstOrDefault()?.Message.Content ?? string.Empty;
+    }
+
+    public async Task<string?> ExtractFactAsync(string message)
+    {
+        const string systemPrompt = """
+            Ты анализируешь сообщение пользователя из чата. Если в нём есть
+            конкретный факт о человеке, стоящий запоминания (имя, увлечение,
+            профессия, место жительства, предпочтение и т.п.) — выведи его
+            одной короткой фразой на русском, без пояснений. Если ничего
+            примечательного нет — выведи ровно слово NONE.
+            """;
+
+        var raw = await AskAsync(systemPrompt, message);
+        var trimmed = raw.Trim();
+
+        return trimmed.Equals("none", StringComparison.OrdinalIgnoreCase) || trimmed.Length == 0
+            ? null
+            : trimmed;
     }
 
     private class ChatRequest

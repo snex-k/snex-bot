@@ -83,7 +83,7 @@ public static class NameStyleData
     {
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bot", rest.Token);
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bot", rest.Token.RawToken);
 
         var response = await http.PatchAsJsonAsync(
             $"https://discord.com/api/v10/guilds/{guildId}/members/@me", body);
@@ -113,8 +113,8 @@ public class NameStyleCommandModule : ApplicationCommandModule<ApplicationComman
             Flags = MessageFlags.Ephemeral,
             Components =
             [
-                new ActionRowProperties().AddComponents(fontMenu),
-                new ActionRowProperties().AddComponents(effectMenu),
+                fontMenu,
+                effectMenu,
                 new ActionRowProperties().AddComponents(resetButton),
             ],
         }));

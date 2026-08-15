@@ -12,9 +12,14 @@ public class Program
         var config = Config.Load();
         var systemPrompt = Prompt.BuildSystemPrompt(config.Personality, config.Emojis);
         var groq = new Groq(config.GroqApiKey);
-        var db = Database.Connect(config.DatabaseUrl);
+        var db = await Database.ConnectAsync(config.DatabaseUrl);
         var messageHandler = new Handler(config, groq, systemPrompt, db);
 
+        // Render ограничивает число inotify-инстансов на контейнер, а
+        // ASP.NET Core по умолчанию следит за файлами конфигурации через
+        // FileSystemWatcher — упираемся в лимит. Мы не используем
+        // appsettings.json (все настройки через .env), поэтому отключаем
+        // отслеживание изменений конфигурации целиком.
         Environment.SetEnvironmentVariable("DOTNET_hostBuilder:reloadConfigOnChange", "false");
 
         var builder = WebApplication.CreateBuilder(args);
@@ -26,7 +31,10 @@ public class Program
                 | GatewayIntents.MessageContent
                 | GatewayIntents.Guilds;
         });
-        
+
+        // Render (free Web Service) требует открытый порт, иначе убивает
+        // процесс по таймауту. Боту порт не нужен, поэтому поднимаем
+        // минимальный endpoint, который просто отвечает "ok".
         var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
         builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 

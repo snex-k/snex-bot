@@ -12,8 +12,8 @@ public static class ErrorMessage
         var avatarUrl = botUser.GetAvatarUrl()?.ToString() ?? botUser.DefaultAvatarUrl.ToString();
 
         var section = new ComponentSectionProperties(
-            [new TextDisplayProperties($"`ошибка: {message}`")],
-            new ComponentSectionThumbnailProperties(new ComponentMediaProperties(avatarUrl)));
+            new ComponentSectionThumbnailProperties(new ComponentMediaProperties(avatarUrl)),
+            [new TextDisplayProperties($"`ошибка: {message}`")]);
 
         var container = new ComponentContainerProperties([section])
         {
@@ -22,7 +22,7 @@ public static class ErrorMessage
 
         var properties = new MessageProperties
         {
-            Flags = MessageFlags.ComponentsV2,
+            Flags = MessageFlags.IsComponentsV2,
             Components = [container],
         };
 

@@ -12,7 +12,8 @@ public class Program
         var config = Config.Load();
         var systemPrompt = Prompt.BuildSystemPrompt(config.Personality, config.Emojis);
         var groq = new Groq(config.GroqApiKey);
-        var messageHandler = new Handler(config, groq, systemPrompt);
+        var db = Database.Connect(config.DatabaseUrl);
+        var messageHandler = new Handler(config, groq, systemPrompt, db);
 
         var builder = WebApplication.CreateBuilder(args);
 

@@ -1,4 +1,4 @@
-using Npgsql;
+sing Npgsql;
 
 namespace Snex;
 
@@ -14,22 +14,42 @@ public class Database
         _connectionString = connectionString;
     }
 
-    public static Database Connect(string databaseUrl)
+    public static async Task<Database> ConnectAsync(string databaseUrl)
     {
+        // Npgsql не понимает URI-формат (postgresql://user:pass@host/db)
+        // напрямую — нужно самим разобрать его на составляющие и собрать
+        // classic ADO.NET connection string.
         var uri = new Uri(databaseUrl);
         var userInfo = uri.UserInfo.Split(':', 2);
 
+        // Supabase pooler сейчас отдаёт IPv4-адрес, а на Render иногда
+        // нестабильно работает резолвинг/маршрутизация через IPv6 —
+        // резолвим хост в IPv4 явно, чтобы не ловить обрывы соединения.
+        var addresses = await System.Net.Dns.GetHostAddressesAsync(
+            uri.Host, System.Net.Sockets.AddressFamily.InterNetwork);
+        var host = addresses.Length > 0 ? addresses[0].ToString() : uri.Host;
+
         var builder = new NpgsqlConnectionStringBuilder
         {
-            Host = uri.Host,
+            Host = host,
             Port = uri.Port > 0 ? uri.Port : 5432,
             Username = Uri.UnescapeDataString(userInfo[0]),
             Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "",
             Database = uri.AbsolutePath.TrimStart('/'),
             SslMode = SslMode.Require,
+            // Supabase connection pooler (порт 6543, Transaction mode) не
+            // поддерживает server-side prepared statements между разными
+            // соединениями пула — отключаем их в Npgsql явно, иначе можно
+            // получить "prepared statement already exists" (как было с sqlx).
             MaxAutoPrepare = 0,
+            // Транзакционный pooler закрывает соединения агрессивнее, чем
+            // обычный Postgres — держим пул небольшим и не переиспользуем
+            // соединения слишком долго, чтобы не ловить оборванные стримы.
             MaxPoolSize = 5,
-            ConnectionIdleLifetime = 30,
+            MinPoolSize = 1,
+            Pooling = true,
+            ConnectionIdleLifetime = 300,
+            ConnectionPruningInterval = 60,
             Timeout = 15,
             CommandTimeout = 15,
         };
@@ -44,6 +64,7 @@ public class Database
         return conn;
     }
 
+    /// Сохраняет сообщение в историю канала (используется для контекста диалога).
     public async Task SaveMessageAsync(string channelId, string authorId, string authorName, string content)
     {
         await using var conn = OpenConnection();
@@ -57,6 +78,8 @@ public class Database
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// Возвращает последние N сообщений канала в хронологическом порядке
+    /// (старые → новые), для использования как контекст диалога.
     public async Task<List<ChatMessage>> RecentMessagesAsync(string channelId, int limit)
     {
         await using var conn = OpenConnection();
@@ -77,6 +100,7 @@ public class Database
         return results;
     }
 
+    /// Сохраняет новый факт о пользователе.
     public async Task SaveFactAsync(string userId, string fact)
     {
         await using var conn = OpenConnection();
@@ -88,6 +112,7 @@ public class Database
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// Возвращает известные факты о пользователе (последние N).
     public async Task<List<UserFact>> UserFactsAsync(string userId, int limit)
     {
         await using var conn = OpenConnection();

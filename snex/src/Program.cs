@@ -15,6 +15,8 @@ public class Program
         var db = Database.Connect(config.DatabaseUrl);
         var messageHandler = new Handler(config, groq, systemPrompt, db);
 
+        Environment.SetEnvironmentVariable("DOTNET_hostBuilder:reloadConfigOnChange", "false");
+
         var builder = WebApplication.CreateBuilder(args);
 
         builder.Services.AddDiscordGateway(options =>
@@ -24,7 +26,7 @@ public class Program
                 | GatewayIntents.MessageContent
                 | GatewayIntents.Guilds;
         });
-
+        
         var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
         builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 

@@ -56,7 +56,6 @@ public class Program
         client.MessageCreate += async message => await messageHandler.HandleAsync(message, client);
 
         app.AddModules(typeof(Program).Assembly);
-        ((IHost)app).UseGatewayEventHandlers();
 
         // Регистрируем /namestyle и другие slash-команды в Discord.
         // Глобальная регистрация может занять до часа на распространение,

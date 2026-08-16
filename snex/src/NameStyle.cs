@@ -89,6 +89,22 @@ public static class NameStyleData
             $"https://discord.com/api/v10/guilds/{guildId}/members/@me", body);
         response.EnsureSuccessStatusCode();
     }
+
+    /// Собирает Components V2 сообщение с одним текстовым блоком —
+    /// используется для всех служебных ответов namestyle (статусы, ошибки).
+    public static InteractionMessageProperties TextV2(string text)
+    {
+        var container = new ComponentContainerProperties
+        {
+            new TextDisplayProperties(text),
+        };
+
+        return new InteractionMessageProperties
+        {
+            Flags = MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+            Components = [container],
+        };
+    }
 }
 
 public class NameStyleCommandModule : ApplicationCommandModule<ApplicationCommandContext>
@@ -108,15 +124,18 @@ public class NameStyleCommandModule : ApplicationCommandModule<ApplicationComman
 
         var resetButton = new ButtonProperties("namestyle_reset_btn", "Сбросить стиль", ButtonStyle.Danger);
 
+        var container = new ComponentContainerProperties
+        {
+            new TextDisplayProperties("### Стиль ника бота\n-# Выбери шрифт и эффект, затем укажи цвет(а)"),
+            fontMenu,
+            effectMenu,
+            new ActionRowProperties().AddComponents(resetButton),
+        };
+
         await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
         {
-            Flags = MessageFlags.Ephemeral,
-            Components =
-            [
-                fontMenu,
-                effectMenu,
-                new ActionRowProperties().AddComponents(resetButton),
-            ],
+            Flags = MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+            Components = [container],
         }));
     }
 }
@@ -134,11 +153,8 @@ public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInt
             (fontId, null),
             (_, existing) => (fontId, existing.EffectId));
 
-        await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
-        {
-            Flags = MessageFlags.Ephemeral,
-            Content = $"### Шрифт выбран: {NameStyleData.FontName(fontId)}\n-# Теперь выбери эффект",
-        }));
+        await RespondAsync(InteractionCallback.Message(
+            NameStyleData.TextV2($"### Шрифт выбран: {NameStyleData.FontName(fontId)}\n-# Теперь выбери эффект")));
     }
 
     [ComponentInteraction("namestyle_effect_select")]
@@ -154,11 +170,8 @@ public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInt
 
         if (state.FontId is not byte fontId)
         {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = "### Сначала выбери шрифт в select-меню выше",
-            }));
+            await RespondAsync(InteractionCallback.Message(
+                NameStyleData.TextV2("### Сначала выбери шрифт в select-меню выше")));
             return;
         }
 
@@ -201,19 +214,11 @@ public class NameStyleButtonModule : ComponentInteractionModule<ButtonInteractio
         {
             await NameStyleData.ResetAsync(Context.Client.Rest, guildId);
             NameStyleData.Pending.TryRemove(guildId, out _);
-            await FollowupAsync(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = "### Стиль сброшен",
-            });
+            await FollowupAsync(NameStyleData.TextV2("### Стиль сброшен"));
         }
         catch (Exception ex)
         {
-            await FollowupAsync(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = $"`ошибка: {ex.Message}`",
-            });
+            await FollowupAsync(NameStyleData.TextV2($"`ошибка: {ex.Message}`"));
         }
     }
 }
@@ -238,11 +243,8 @@ public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionC
         }
         catch
         {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = "### Неверный формат цвета, используй `#rrggbb`",
-            }));
+            await RespondAsync(InteractionCallback.Message(
+                NameStyleData.TextV2("### Неверный формат цвета, используй `#rrggbb`")));
             return;
         }
 
@@ -254,22 +256,16 @@ public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionC
             }
             catch
             {
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
-                {
-                    Flags = MessageFlags.Ephemeral,
-                    Content = "### Неверный формат цвета, используй `#rrggbb`",
-                }));
+                await RespondAsync(InteractionCallback.Message(
+                    NameStyleData.TextV2("### Неверный формат цвета, используй `#rrggbb`")));
                 return;
             }
         }
 
         if (effectId == 2 && colors.Count != 2)
         {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = "### Для эффекта Gradient нужно указать 2 цвета",
-            }));
+            await RespondAsync(InteractionCallback.Message(
+                NameStyleData.TextV2("### Для эффекта Gradient нужно указать 2 цвета")));
             return;
         }
 
@@ -286,19 +282,11 @@ public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionC
                        $"> **Эффект:** {NameStyleData.EffectName(effectId)}\n" +
                        $"> **Цвет:** {colorText}";
 
-            await FollowupAsync(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = text,
-            });
+            await FollowupAsync(NameStyleData.TextV2(text));
         }
         catch (Exception ex)
         {
-            await FollowupAsync(new InteractionMessageProperties
-            {
-                Flags = MessageFlags.Ephemeral,
-                Content = $"`ошибка: {ex.Message}`",
-            });
+            await FollowupAsync(NameStyleData.TextV2($"`ошибка: {ex.Message}`"));
         }
     }
 }

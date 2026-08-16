@@ -246,8 +246,6 @@ public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionC
         var color1Raw = textInputs.FirstOrDefault(t => t.CustomId == "color1")?.Value ?? "";
         var color2Raw = textInputs.FirstOrDefault(t => t.CustomId == "color2")?.Value ?? "";
 
-        Console.WriteLine($"[namestyle] textInputs count: {textInputs.Count}, color1Raw: '{color1Raw}', color2Raw: '{color2Raw}'");
-
         var colors = new List<int>();
         try
         {

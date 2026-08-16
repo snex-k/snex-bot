@@ -63,11 +63,11 @@ public class Program
         var commandService = app.Services.GetRequiredService<ApplicationCommandService<ApplicationCommandContext>>();
         client.Ready += async readyEventArgs =>
         {
-            foreach (var guild in readyEventArgs.Guilds)
+            foreach (var guildId in readyEventArgs.GuildIds)
             {
-                await commandService.RegisterCommandsAsync(client.Rest, client.Id, guild.Id);
+                await commandService.RegisterCommandsAsync(client.Rest, client.Id, guildId);
             }
-            Console.WriteLine($"Slash-команды зарегистрированы на {readyEventArgs.Guilds.Count} серверах");
+            Console.WriteLine($"Slash-команды зарегистрированы на {readyEventArgs.GuildIds.Count} серверах");
         };
 
         Console.WriteLine("Snex запускается...");

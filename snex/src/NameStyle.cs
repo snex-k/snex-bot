@@ -83,7 +83,7 @@ public static class NameStyleData
     {
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bot", rest.Token.RawToken);
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bot", rest.Token?.RawToken ?? "");
 
         var response = await http.PatchAsJsonAsync(
             $"https://discord.com/api/v10/guilds/{guildId}/members/@me", body);
@@ -124,10 +124,10 @@ public class NameStyleCommandModule : ApplicationCommandModule<ApplicationComman
 public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInteractionContext>
 {
     [ComponentInteraction("namestyle_font_select")]
-    public async Task FontSelectAsync(string[] values)
+    public async Task FontSelectAsync()
     {
         var guildId = Context.Interaction.GuildId!.Value;
-        var fontId = byte.Parse(values[0]);
+        var fontId = byte.Parse(Context.SelectedValues[0]);
 
         NameStyleData.Pending.AddOrUpdate(
             guildId,
@@ -142,10 +142,10 @@ public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInt
     }
 
     [ComponentInteraction("namestyle_effect_select")]
-    public async Task EffectSelectAsync(string[] values)
+    public async Task EffectSelectAsync()
     {
         var guildId = Context.Interaction.GuildId!.Value;
-        var effectId = byte.Parse(values[0]);
+        var effectId = byte.Parse(Context.SelectedValues[0]);
 
         var state = NameStyleData.Pending.AddOrUpdate(
             guildId,

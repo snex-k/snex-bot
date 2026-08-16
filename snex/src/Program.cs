@@ -55,6 +55,14 @@ public class Program
         var client = app.Services.GetRequiredService<GatewayClient>();
         client.MessageCreate += async message => await messageHandler.HandleAsync(message, client);
 
+        // Временная диагностика: логируем тип каждого interaction,
+        // чтобы понять, доходит ли модалка до бота вообще.
+        client.InteractionCreate += interaction =>
+        {
+            Console.WriteLine($"[interaction] тип: {interaction.GetType().Name}, customId: {(interaction as ModalInteraction)?.Data.CustomId ?? (interaction as ComponentInteraction)?.Data.CustomId ?? "-"}");
+            return default;
+        };
+
         app.AddModules(typeof(Program).Assembly);
 
         // Регистрируем /namestyle и другие slash-команды в Discord.

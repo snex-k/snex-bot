@@ -183,7 +183,7 @@ public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInt
                 .WithRequired(true)
                 .WithMaxLength(7));
 
-        var modal = new ModalProperties($"namestyle_color_modal:{fontId}:{effectId}", "Цвет стиля ника")
+        var modal = new ModalProperties($"namestyle_color_modal:{fontId},{effectId}", "Цвет стиля ника")
             .AddComponents(color1Input);
 
         if (needsTwo)
@@ -225,7 +225,7 @@ public class NameStyleButtonModule : ComponentInteractionModule<ButtonInteractio
 
 public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionContext>
 {
-    [ComponentInteraction("namestyle_color_modal:*:*")]
+    [ComponentInteraction("namestyle_color_modal:*,*")]
     public async Task ColorModalAsync(string fontIdRaw, string effectIdRaw)
     {
         var guildId = Context.Interaction.GuildId!.Value;

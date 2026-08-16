@@ -7,7 +7,7 @@ namespace Snex;
 public class Handler
 {
     private const int HistoryLimit = 15;
-    private const int FactsLimit = 10;
+    private const int FactsLimit = 8;
 
     private readonly Config _config;
     private readonly Groq _groq;
@@ -25,6 +25,7 @@ public class Handler
 
     public async ValueTask HandleAsync(Message message, GatewayClient client)
     {
+        // Не отвечаем сами себе и другим ботам
         if (message.Author.IsBot)
         {
             return;
@@ -33,7 +34,15 @@ public class Handler
         var channelId = message.ChannelId.ToString();
         var authorId = message.Author.Id.ToString();
         var authorName = message.Author.Username;
+
+        // Сохраняем сообщение в историю канала независимо от того,
+        // ответит бот или нет — так собирается контекст на будущее.
+        // Не ждём завершения — не блокирует остальную обработку.
         var saveTask = TrySaveAsync(() => _db.SaveMessageAsync(channelId, authorId, authorName, message.Content));
+
+        // На упоминание отвечаем всегда. Остальные сообщения —
+        // с рандомным шансом, чтобы бот иногда вклинивался в чат сам,
+        // но не отвечал на каждую реплику подряд.
         var isMentioned = message.MentionedUsers.Any(u => u.Id == client.Cache.User!.Id);
 
         if (!isMentioned)
@@ -46,9 +55,14 @@ public class Handler
             }
         }
 
+        // Подтягиваем историю канала и известные факты о человеке
+        // параллельно — они не зависят друг от друга.
+        var dbStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var historyTask = TryGetAsync(() => _db.RecentMessagesAsync(channelId, HistoryLimit), []);
         var factsTask = TryGetAsync(() => _db.UserFactsAsync(authorId, FactsLimit), []);
         await Task.WhenAll(saveTask, historyTask, factsTask);
+        dbStopwatch.Stop();
+        Console.WriteLine($"[timing] БД (сохранение+история+факты): {dbStopwatch.ElapsedMilliseconds}ms");
 
         var history = await historyTask;
         var facts = await factsTask;
@@ -56,9 +70,12 @@ public class Handler
         var contextMessage = Prompt.BuildContextMessage(history, facts, authorName, message.Content);
 
         string rawReply;
+        var groqStopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             rawReply = await _groq.AskAsync(_systemPrompt, contextMessage);
+            groqStopwatch.Stop();
+            Console.WriteLine($"[timing] Groq API: {groqStopwatch.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
@@ -69,6 +86,7 @@ public class Handler
 
         var parsed = Response.Parse(rawReply, _config.Emojis);
 
+        var sendStopwatch = System.Diagnostics.Stopwatch.StartNew();
         if (!string.IsNullOrWhiteSpace(parsed.Text))
         {
             try
@@ -77,6 +95,8 @@ public class Handler
                 {
                     Content = parsed.Text,
                 });
+                sendStopwatch.Stop();
+                Console.WriteLine($"[timing] Отправка в Discord: {sendStopwatch.ElapsedMilliseconds}ms");
             }
             catch (Exception ex)
             {
@@ -100,6 +120,9 @@ public class Handler
             }
         }
 
+        // Отдельным запросом проверяем, не сказал ли человек что-то,
+        // что стоит запомнить на будущее. Не блокирует ответ пользователю —
+        // запускается в фоне после того, как сообщение уже отправлено.
         _ = Task.Run(async () =>
         {
             try

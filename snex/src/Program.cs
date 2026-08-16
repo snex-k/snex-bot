@@ -58,13 +58,16 @@ public class Program
         app.AddModules(typeof(Program).Assembly);
 
         // Регистрируем /namestyle и другие slash-команды в Discord.
-        // Глобальная регистрация может занять до часа на распространение,
-        // но для одного-двух серверов хобби-бота это не критично.
+        // По гильдиям — команды появляются мгновенно, в отличие от
+        // глобальной регистрации, которая может занять до часа.
         var commandService = app.Services.GetRequiredService<ApplicationCommandService<ApplicationCommandContext>>();
-        client.Ready += async _ =>
+        client.Ready += async readyEventArgs =>
         {
-            await commandService.RegisterCommandsAsync(client.Rest, client.Id);
-            Console.WriteLine("Slash-команды зарегистрированы");
+            foreach (var guild in readyEventArgs.Guilds)
+            {
+                await commandService.RegisterCommandsAsync(client.Rest, client.Id, guild.Id);
+            }
+            Console.WriteLine($"Slash-команды зарегистрированы на {readyEventArgs.Guilds.Count} серверах");
         };
 
         Console.WriteLine("Snex запускается...");

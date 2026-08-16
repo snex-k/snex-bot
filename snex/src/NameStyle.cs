@@ -239,9 +239,12 @@ public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionC
             return;
         }
 
-        var components = Context.Interaction.Data.Components;
-        var color1Raw = components.OfType<TextInput>().FirstOrDefault(t => t.CustomId == "color1")?.Value ?? "";
-        var color2Raw = components.OfType<TextInput>().FirstOrDefault(t => t.CustomId == "color2")?.Value ?? "";
+        var textInputs = Context.Components.OfType<Label>()
+            .Select(l => l.Component)
+            .OfType<TextInput>()
+            .ToList();
+        var color1Raw = textInputs.FirstOrDefault(t => t.CustomId == "color1")?.Value ?? "";
+        var color2Raw = textInputs.FirstOrDefault(t => t.CustomId == "color2")?.Value ?? "";
 
         var colors = new List<int>();
         try

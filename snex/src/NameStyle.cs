@@ -183,7 +183,7 @@ public class NameStyleComponentModule : ComponentInteractionModule<StringMenuInt
                 .WithRequired(true)
                 .WithMaxLength(7));
 
-        var modal = new ModalProperties($"namestyle_color_modal:{fontId},{effectId}", "Цвет стиля ника")
+        var modal = new ModalProperties("namestyle_color_modal", "Цвет стиля ника")
             .AddComponents(color1Input);
 
         if (needsTwo)
@@ -225,12 +225,19 @@ public class NameStyleButtonModule : ComponentInteractionModule<ButtonInteractio
 
 public class NameStyleModalModule : ComponentInteractionModule<ModalInteractionContext>
 {
-    [ComponentInteraction("namestyle_color_modal:*,*")]
-    public async Task ColorModalAsync(string fontIdRaw, string effectIdRaw)
+    [ComponentInteraction("namestyle_color_modal")]
+    public async Task ColorModalAsync()
     {
         var guildId = Context.Interaction.GuildId!.Value;
-        var fontId = byte.Parse(fontIdRaw);
-        var effectId = byte.Parse(effectIdRaw);
+
+        if (!NameStyleData.Pending.TryGetValue(guildId, out var state)
+            || state.FontId is not byte fontId
+            || state.EffectId is not byte effectId)
+        {
+            await RespondAsync(InteractionCallback.Message(
+                NameStyleData.TextV2("### Сессия настройки истекла, начни заново с `/namestyle`")));
+            return;
+        }
 
         var components = Context.Interaction.Data.Components;
         var color1Raw = components.OfType<TextInput>().FirstOrDefault(t => t.CustomId == "color1")?.Value ?? "";

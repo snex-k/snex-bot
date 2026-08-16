@@ -57,9 +57,6 @@ public class Program
 
         app.AddModules(typeof(Program).Assembly);
 
-        IHost host = app;
-        host.UseGatewayEventHandlers();
-
         // Регистрируем /namestyle и другие slash-команды в Discord.
         // По гильдиям — команды появляются мгновенно, в отличие от
         // глобальной регистрации, которая может занять до часа.
